@@ -9,11 +9,11 @@ class TestGetDownloads(unittest.TestCase):
     def test_get_downloads(self):
 
         test_config = [
-            {'version':  [1], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 6, 5, 4, 28, 30)},
-            {'version': [10], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 6, 27, 4, 23, 25)},
-            {'version': [20], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 6, 30, 21, 26, 5)},
-            {'version': [30], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 10, 2, 23, 17, 29, 397160)},
-            {'version': [60], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2017, 8, 5, 22, 6, 52, 88356)}
+            {'version':  [1], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 6, 5, 4, 28, 30, tzinfo=datetime.timezone.utc)},
+            {'version': [10], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 6, 27, 4, 23, 25, tzinfo=datetime.timezone.utc)},
+            {'version': [20], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 6, 30, 21, 26, 5, tzinfo=datetime.timezone.utc)},
+            {'version': [30], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2013, 10, 2, 23, 17, 29, 397160, tzinfo=datetime.timezone.utc)},
+            {'version': [60], 'record_count': 2, 'wikipedia_record': 0, 'wikipedia_timestamp': datetime.datetime(2017, 8, 5, 22, 6, 52, 88356, tzinfo=datetime.timezone.utc)}
         ]
 
         for config in test_config:
