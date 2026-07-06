@@ -5,6 +5,7 @@ protobuf>=6.33.2
 puremagic~=1.11
 pycryptodome>=3.9.7
 pycryptodomex>=3.9.7
+pywin32>=306; sys_platform == "win32"
 setuptools>=65.5.1
 tzdata>=2024.1
 xlsxwriter>=3.1

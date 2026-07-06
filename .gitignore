@@ -3,7 +3,6 @@ hindsight_config.json
 .idea/
 build/
 dist/
-!dist/*.exe
 node_modules/
 pyhindsight/static/web_modules/
 **/__pycache__/
