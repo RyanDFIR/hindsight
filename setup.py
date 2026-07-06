@@ -10,11 +10,10 @@ setup(
   url='https://github.com/obsidianforensics/hindsight',
   author='Ryan Benson',
   author_email='ryan@hindsig.ht',
-  license='Apache',
+  license='Apache-2.0',
   keywords=['chrome', 'forensics', 'dfir', 'google-chrome', 'chromium'],
   classifiers=[
     'Development Status :: 5 - Production/Stable',
-    'License :: OSI Approved :: Apache Software License',
     'Topic :: Security',
     'Topic :: System :: Recovery Tools',
   ],
