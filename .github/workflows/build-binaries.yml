@@ -1,0 +1,95 @@
+# Builds one-file Hindsight binaries for Windows, Linux, and macOS with PyInstaller.
+#
+# Triggers on pushing a release tag (v*) — binaries are attached to the matching
+# GitHub release (or a draft release is created if one doesn't exist yet).
+# Can also be run manually (workflow_dispatch) to get binaries as workflow artifacts
+# without cutting a release.
+#
+# Notes:
+# - Linux builds on the oldest available Ubuntu runner: PyInstaller binaries require
+#   the build machine's glibc or newer, so older runner = wider compatibility.
+# - macOS binaries are unsigned/un-notarized: Gatekeeper will quarantine downloads.
+#   Users need to right-click > Open, or `xattr -d com.apple.quarantine hindsight-*`.
+#   Proper signing requires an Apple Developer ID cert added as a repo secret.
+name: Build binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.suffix }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            suffix: windows-x86_64
+          - os: ubuntu-22.04
+            suffix: linux-x86_64
+          - os: macos-latest # Apple Silicon
+            suffix: macos-arm64
+          - os: macos-15-intel
+            suffix: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build executables
+        working-directory: spec
+        run: |
+          pyinstaller --distpath ../dist-ci -y hindsight.spec
+          pyinstaller --distpath ../dist-ci -y hindsight_gui.spec
+
+      - name: Smoke test
+        shell: bash
+        run: ./dist-ci/hindsight --help
+
+      - name: Rename binaries per platform
+        shell: bash
+        run: |
+          mkdir upload
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp dist-ci/hindsight.exe "upload/hindsight-${{ matrix.suffix }}.exe"
+            cp dist-ci/hindsight_gui.exe "upload/hindsight_gui-${{ matrix.suffix }}.exe"
+          else
+            cp dist-ci/hindsight "upload/hindsight-${{ matrix.suffix }}"
+            cp dist-ci/hindsight_gui "upload/hindsight_gui-${{ matrix.suffix }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.suffix }}
+          path: upload/*
+
+  attach-to-release:
+    name: Attach binaries to release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: upload
+          merge-multiple: true
+
+      - name: Upload to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" upload/* --clobber --repo "$GITHUB_REPOSITORY" \
+            || gh release create "$GITHUB_REF_NAME" upload/* --draft --generate-notes --repo "$GITHUB_REPOSITORY"
