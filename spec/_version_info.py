@@ -9,12 +9,17 @@ sys.path.insert(0, _REPO_ROOT)
 
 from pyhindsight import __version__
 
-from PyInstaller.utils.win32.versioninfo import (
-    VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct,
-    VarFileInfo, VarStruct)
-
 
 def make_version_info(original_filename):
+    # The version resource is Windows-only, and PyInstaller's versioninfo
+    # module can't even be imported elsewhere (pefile is a Windows-only dep).
+    if sys.platform != 'win32':
+        return None
+
+    from PyInstaller.utils.win32.versioninfo import (
+        VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct,
+        VarFileInfo, VarStruct)
+
     parts = __version__.split('.')
     year, month = int(parts[0]), int(parts[1])
     micro = int(parts[2]) if len(parts) > 2 else 0
