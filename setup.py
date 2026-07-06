@@ -22,7 +22,7 @@ setup(
     'bottle>=0.12.18',
     'keyring>=21.2.1',
     'pycryptodomex>=3.9.7',
-    # 'pypiwin32>=219',
+    'pywin32>=306; sys_platform == "win32"',
     'xlsxwriter>=3.1',
     'puremagic>=1.11',
     'protobuf>=4.23',
