@@ -308,6 +308,7 @@ class Firefox(WebBrowser):
             rows = cursor.fetchall()
             folder_titles = {r['id']: (r['title'] or '') for r in rows if r['type'] == BOOKMARK_TYPE_FOLDER}
 
+            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             for row in rows:
                 bm_type = row.get('type')
                 parent_folder = folder_titles.get(row.get('parent'), '')
@@ -323,6 +324,7 @@ class Firefox(WebBrowser):
                         url=row.get('url'),
                         parent_folder=parent_folder,
                     )
+                    item.source_item = source_item
                     results.append(item)
                 elif bm_type == BOOKMARK_TYPE_FOLDER:
                     # Skip the synthetic top-level roots (menu/toolbar/tags/unfiled/mobile).
@@ -335,6 +337,7 @@ class Firefox(WebBrowser):
                         name=row.get('title') or '',
                         parent_folder=parent_folder,
                     )
+                    item.source_item = source_item
                     results.append(item)
 
             self.artifacts_counts['Bookmarks'] = len(results)
@@ -1182,6 +1185,7 @@ class Firefox(WebBrowser):
                 )
                 item.row_type = row_label
                 item.value = ''
+                item.source_item = source_item
                 item.transition_type = (
                     'selected' if nav_idx + 1 == selected_index else 'history'
                 )
@@ -1216,6 +1220,7 @@ class Firefox(WebBrowser):
                     )
                     item.row_type = f'session (closed tab, {source_label})'
                     item.value = ''
+                    item.source_item = source_item
                     item.transition_type = 'closed'
                     results.append(item)
 
@@ -1241,6 +1246,7 @@ class Firefox(WebBrowser):
                     )
                     item.row_type = f'session (closed window, {source_label})'
                     item.value = ''
+                    item.source_item = source_item
                     item.transition_type = 'closed'
                     results.append(item)
 
