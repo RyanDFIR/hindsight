@@ -45,6 +45,16 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Check tag matches pyhindsight.__version__
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          VERSION=$(python -c "import pyhindsight; print(pyhindsight.__version__)")
+          if [[ "v$VERSION" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyhindsight.__version__ (v$VERSION)"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
@@ -63,8 +73,11 @@ jobs:
         run: |
           mkdir upload
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cp dist-ci/hindsight.exe "upload/hindsight-${{ matrix.suffix }}.exe"
-            cp dist-ci/hindsight_gui.exe "upload/hindsight_gui-${{ matrix.suffix }}.exe"
+            # Windows keeps the historical plain asset names; the .exe extension
+            # differentiates it. Linux/macOS need suffixes: three extensionless
+            # binaries would otherwise collide on the same asset filename.
+            cp dist-ci/hindsight.exe upload/hindsight.exe
+            cp dist-ci/hindsight_gui.exe upload/hindsight_gui.exe
           else
             cp dist-ci/hindsight "upload/hindsight-${{ matrix.suffix }}"
             cp dist-ci/hindsight_gui "upload/hindsight_gui-${{ matrix.suffix }}"
