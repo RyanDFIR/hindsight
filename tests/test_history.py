@@ -9,11 +9,11 @@ class TestGetHistory(unittest.TestCase):
     def test_get_history(self):
 
         test_config = [
-            {'version':  [1], 'record_count': 46, 'wikipedia_record': 7, 'wikipedia_timestamp': datetime.datetime(2013, 6, 5, 4, 28, 55, 498623)},
-            {'version': [10], 'record_count': 84, 'wikipedia_record': 7, 'wikipedia_timestamp': datetime.datetime(2013, 6, 27, 4, 23, 14, 176756)},
-            {'version': [20], 'record_count': 58, 'wikipedia_record': 7, 'wikipedia_timestamp': datetime.datetime(2013, 6, 30, 21, 26, 13, 162176)},
-            {'version': [30], 'record_count': 46, 'wikipedia_record': 4, 'wikipedia_timestamp': datetime.datetime(2013, 10, 2, 23, 15, 13, 326712)},
-            {'version': [60], 'record_count': 61, 'wikipedia_record': 5, 'wikipedia_timestamp': datetime.datetime(2017, 8, 5, 22, 6, 56, 507864)}
+            {'version':  [1], 'record_count': 46, 'wikipedia_record': 7, 'wikipedia_timestamp': datetime.datetime(2013, 6, 5, 4, 28, 55, 498623, tzinfo=datetime.timezone.utc)},
+            {'version': [10], 'record_count': 84, 'wikipedia_record': 7, 'wikipedia_timestamp': datetime.datetime(2013, 6, 27, 4, 23, 14, 176756, tzinfo=datetime.timezone.utc)},
+            {'version': [20], 'record_count': 58, 'wikipedia_record': 7, 'wikipedia_timestamp': datetime.datetime(2013, 6, 30, 21, 26, 13, 162176, tzinfo=datetime.timezone.utc)},
+            {'version': [30], 'record_count': 46, 'wikipedia_record': 4, 'wikipedia_timestamp': datetime.datetime(2013, 10, 2, 23, 15, 13, 326712, tzinfo=datetime.timezone.utc)},
+            {'version': [60], 'record_count': 61, 'wikipedia_record': 5, 'wikipedia_timestamp': datetime.datetime(2017, 8, 5, 22, 6, 56, 507864, tzinfo=datetime.timezone.utc)}
         ]
 
         for config in test_config:
