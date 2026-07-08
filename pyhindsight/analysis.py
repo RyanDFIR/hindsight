@@ -1335,6 +1335,9 @@ class AnalysisSession(object):
                     w.write_string(row_number, 25, open_friendly, green_value_format)  # opened
                     w.write(row_number, 29, item.etag, green_value_format)  # ETag
                     w.write(row_number, 30, item.last_modified, green_value_format)  # Last Modified
+                    request_headers = getattr(item, 'request_headers', None)
+                    if request_headers:
+                        w.write(row_number, 31, str(request_headers), green_value_format)  # headers
 
                 elif item.row_type.startswith("bookmark folder"):
                     w.write_string(row_number, 0, item.row_type, red_type_format)  # record_type
@@ -2489,7 +2492,7 @@ class AnalysisSession(object):
                 # Column headers
                 ext_ws.write(1, 0, 'Extension', header_format)
                 ext_ws.write(1, 1, 'Type', header_format)
-                ext_ws.write(1, 2, 'Matches / Host', header_format)
+                ext_ws.write(1, 2, 'Matches / Host / Permissions', header_format)
                 ext_ws.write(1, 3, 'run_at', header_format)
                 ext_ws.write(1, 4, 'all_frames', header_format)
                 ext_ws.write(1, 5, 'world', header_format)
@@ -2498,7 +2501,7 @@ class AnalysisSession(object):
 
                 # Column widths
                 ext_ws.set_column('A:A', 22)  # Extension (merged headers; data column is empty)
-                ext_ws.set_column('B:B', 16)  # Type
+                ext_ws.set_column('B:B', 30)  # Type
                 ext_ws.set_column('C:C', 55)  # Matches / Host
                 ext_ws.set_column('D:D', 16)  # run_at
                 ext_ws.set_column('E:E', 10)  # all_frames
@@ -2594,6 +2597,23 @@ class AnalysisSession(object):
                     profile = getattr(ext, 'profile', '') or ''
                     wrote_child = False
 
+                    # 0) Manifest-declared permissions (API + host patterns). Chrome stores
+                    #    the parsed manifest list; Firefox stores a JSON-string summary.
+                    perms = getattr(ext, 'permissions', None)
+                    if isinstance(perms, str):
+                        perms_str = '' if perms in ('None', '[]') else perms
+                    elif perms:
+                        perms_str = fmt_patterns([str(p) for p in perms])
+                    else:
+                        perms_str = ''
+                    if perms_str:
+                        ext_ws.write(row_number, 0, '', cs_format)
+                        ext_ws.write_string(row_number, 1, 'permissions', cs_format)
+                        ext_ws.write_string(row_number, 2, perms_str, cs_format)
+                        ext_ws.write_string(row_number, 7, profile, cs_format)
+                        row_number += 1
+                        wrote_child = True
+
                     # 1) Current capability: manifest content scripts, then live dynamically
                     #    registered scripts (chrome.scripting / chrome.userScripts).
                     for cs in (getattr(ext, 'content_scripts', None) or []):
@@ -2607,15 +2627,24 @@ class AnalysisSession(object):
                         write_script_row(label, cs, dyn_format, dyn_center_format)
                         wrote_child = True
 
-                    # 2) Current host scope (where the extension can actually inject).
-                    for label, hosts in (('host (granted)', getattr(ext, 'granted_scriptable_host', None)),
-                                         ('host (withheld)', getattr(ext, 'withholding_scriptable_host', None)),
-                                         ('host (runtime grant)', getattr(ext, 'runtime_granted_scriptable_host', None))):
-                        if not hosts:
+                    # 2) Current effective capability from Secure Preferences: API
+                    #    permissions, scriptable hosts (content script injection), and
+                    #    explicit hosts (cross-origin fetch/XHR access).
+                    for label, values in (
+                            ('api (granted)', getattr(ext, 'granted_api', None)),
+                            ('api (withheld)', getattr(ext, 'withholding_api', None)),
+                            ('api (runtime grant)', getattr(ext, 'runtime_granted_api', None)),
+                            ('scriptable host (granted)', getattr(ext, 'granted_scriptable_host', None)),
+                            ('scriptable host (withheld)', getattr(ext, 'withholding_scriptable_host', None)),
+                            ('scriptable host (runtime grant)', getattr(ext, 'runtime_granted_scriptable_host', None)),
+                            ('explicit host (granted)', getattr(ext, 'granted_explicit_host', None)),
+                            ('explicit host (withheld)', getattr(ext, 'withholding_explicit_host', None)),
+                            ('explicit host (runtime grant)', getattr(ext, 'runtime_granted_explicit_host', None))):
+                        if not values:
                             continue
                         ext_ws.write(row_number, 0, '', host_format)
                         ext_ws.write_string(row_number, 1, label, host_format)
-                        ext_ws.write_string(row_number, 2, ', '.join(hosts), host_format)
+                        ext_ws.write_string(row_number, 2, fmt_patterns([str(x) for x in values]), host_format)
                         ext_ws.write_string(row_number, 7, profile, host_format)
                         row_number += 1
                         wrote_child = True
@@ -2765,14 +2794,15 @@ class AnalysisSession(object):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item, '
                         'interrupt_reason, danger_type, opened, etag, last_modified, '
-                        'mime_type, referrer, tab_url, download_source, hash, guid) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'mime_type, referrer, tab_url, download_source, hash, guid, http_headers) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, friendly_date(item.timestamp), item.url, item.status_friendly, item.value,
                          item.interpretation, item.profile, item.source_item, item.interrupt_reason_friendly,
                          item.danger_type_friendly, item.opened, item.etag, item.last_modified,
                          getattr(item, 'mime_type', None), getattr(item, 'referrer', None),
                          getattr(item, 'tab_url', None), getattr(item, 'download_source', None),
-                         getattr(item, 'hash', None), getattr(item, 'guid', None)))
+                         getattr(item, 'hash', None), getattr(item, 'guid', None),
+                         str(item.request_headers) if getattr(item, 'request_headers', None) else None))
 
                 elif item.row_type.startswith('bookmark folder'):
                     c.execute(
@@ -2883,12 +2913,17 @@ class AnalysisSession(object):
 
             if self.__dict__.get('installed_extensions'):
                 for extension in self.installed_extensions['data']:
+                    # permissions is a parsed list on Chrome records (a JSON string on
+                    # Firefox ones); serialize to JSON here at the storage boundary.
+                    permissions = extension.permissions
+                    if permissions is not None and not isinstance(permissions, str):
+                        permissions = json.dumps(permissions)
                     c.execute(
                         'INSERT INTO installed_extensions (name, description, version, ext_id, profile, '
                         'permissions, manifest) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?)',
                         (extension.name, extension.description, extension.version, extension.ext_id,
-                         extension.profile, extension.permissions, extension.manifest))
+                         extension.profile, permissions, extension.manifest))
 
             for preference_group in self.preferences:
                 title = preference_group.get('presentation', {}).get('title')

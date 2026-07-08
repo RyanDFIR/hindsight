@@ -540,8 +540,8 @@ class Chrome(WebBrowser):
             parts.append(f'By extension: {by_ext}')
         if getattr(item, 'by_web_app_id', None):
             parts.append(f'By web app: {item.by_web_app_id}')
-        # mime_type / referrer / tab_url have dedicated Timeline columns, so they are not
-        # repeated here.
+        # mime_type / referrer / tab_url / request_headers have dedicated Timeline columns,
+        # so they are not repeated here.
         if getattr(item, 'site_url', None):
             parts.append(f'Site: {item.site_url}')
         if getattr(item, 'http_method', None):
@@ -553,8 +553,10 @@ class Chrome(WebBrowser):
         chain = getattr(item, 'url_chain', None)
         if chain and len(chain) > 1:
             parts.append('Redirect chain: ' + ' -> '.join(chain))
-        if getattr(item, 'request_headers', None):
-            parts.append(f'{len(item.request_headers)} request header(s)')
+        # In practice only set for shared_proto_db downloads; the History downloads
+        # table has a hash column but Chrome never populates it.
+        if getattr(item, 'hash', None):
+            parts.append(f'SHA-256: {item.hash}')
         if getattr(item, 'transient', None):
             parts.append('Transient')
         return ' | '.join(parts)
@@ -2083,14 +2085,14 @@ class Chrome(WebBrowser):
             if ext is None:
                 ext = Chrome.BrowserExtension(
                     profile=profile, ext_id=ext_id, name=name, description=description,
-                    version=manifest.get('version'), permissions=str(manifest.get('permissions')),
+                    version=manifest.get('version'), permissions=manifest.get('permissions'),
                     manifest=json.dumps(manifest))
                 self._extensions_by_id[ext_id] = ext
             else:
                 ext.name = name or ext.name
                 ext.description = description or ext.description
                 ext.version = manifest.get('version') or ext.version
-                ext.permissions = str(manifest.get('permissions'))
+                ext.permissions = manifest.get('permissions') or ext.permissions
                 ext.manifest = json.dumps(manifest)
             ext.on_disk = True
             ext.profile = profile
@@ -2177,16 +2179,18 @@ class Chrome(WebBrowser):
 
             manifest = v.get('manifest') if isinstance(v.get('manifest'), dict) else {}
 
-            # Granted/withheld host scope determines where content scripts can inject.
-            def _scriptable(perm_key):
+            # Each permission-set pref (granted / withholding / runtime_granted) holds
+            # 'api' (API permissions), 'explicit_host' (cross-origin API access), and
+            # 'scriptable_host' (content script injection scope) lists.
+            def _perm_list(perm_key, sub_key):
                 perms = v.get(perm_key)
                 if isinstance(perms, dict):
-                    return perms.get('scriptable_host') or []
+                    return perms.get(sub_key) or []
                 return []
 
-            granted_scriptable = _scriptable('granted_permissions')
-            withholding_scriptable = _scriptable('withholding_permissions')
-            runtime_scriptable = _scriptable('runtime_granted_permissions')
+            granted_scriptable = _perm_list('granted_permissions', 'scriptable_host')
+            withholding_scriptable = _perm_list('withholding_permissions', 'scriptable_host')
+            runtime_scriptable = _perm_list('runtime_granted_permissions', 'scriptable_host')
 
             content_scripts = manifest.get('content_scripts') or []
 
@@ -2209,7 +2213,7 @@ class Chrome(WebBrowser):
                 ext = Chrome.BrowserExtension(
                     profile=path, ext_id=ext_id, name=name,
                     description=manifest.get('description'), version=manifest.get('version'),
-                    permissions=str(manifest.get('permissions')), manifest=json.dumps(manifest))
+                    permissions=manifest.get('permissions'), manifest=json.dumps(manifest))
                 self._extensions_by_id[ext_id] = ext
             else:
                 # Disk data is authoritative for name/description/version/manifest; only
@@ -2220,6 +2224,8 @@ class Chrome(WebBrowser):
                     ext.description = manifest.get('description')
                 if not ext.version:
                     ext.version = manifest.get('version')
+                if not ext.permissions:
+                    ext.permissions = manifest.get('permissions')
                 if not ext.manifest:
                     ext.manifest = json.dumps(manifest)
 
@@ -2235,6 +2241,12 @@ class Chrome(WebBrowser):
             ext.granted_scriptable_host = granted_scriptable
             ext.withholding_scriptable_host = withholding_scriptable
             ext.runtime_granted_scriptable_host = runtime_scriptable
+            ext.granted_api = _perm_list('granted_permissions', 'api')
+            ext.withholding_api = _perm_list('withholding_permissions', 'api')
+            ext.runtime_granted_api = _perm_list('runtime_granted_permissions', 'api')
+            ext.granted_explicit_host = _perm_list('granted_permissions', 'explicit_host')
+            ext.withholding_explicit_host = _perm_list('withholding_permissions', 'explicit_host')
+            ext.runtime_granted_explicit_host = _perm_list('runtime_granted_permissions', 'explicit_host')
             # On-disk content scripts (actual files) win; otherwise use the cached copy here.
             if not ext.content_scripts and content_scripts:
                 ext.content_scripts = content_scripts

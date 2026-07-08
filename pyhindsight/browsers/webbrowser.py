@@ -510,6 +510,9 @@ class WebBrowser(object):
             self.name = name
             self.description = description
             self.version = version
+            # Manifest-declared permissions. Chrome stores the parsed manifest list
+            # (or None); Firefox stores a compact JSON-string summary. Serialized to
+            # a string only at the SQLite output boundary.
             self.permissions = permissions
             self.manifest = manifest
             # Presence: whether the extension was found unpacked on disk (Extensions/<id>/),
@@ -531,6 +534,17 @@ class WebBrowser(object):
             self.granted_scriptable_host = granted_scriptable_host or []
             self.withholding_scriptable_host = withholding_scriptable_host or []
             self.runtime_granted_scriptable_host = runtime_granted_scriptable_host or []
+            # API permissions actually granted / withheld / granted at runtime
+            # (Secure Preferences granted_permissions.api etc.), which can differ
+            # from the manifest-declared set above.
+            self.granted_api = []
+            self.withholding_api = []
+            self.runtime_granted_api = []
+            # Host scope for cross-origin API access (fetch/XHR from extension
+            # contexts) — 'explicit_host', distinct from scriptable_host (injection).
+            self.granted_explicit_host = []
+            self.withholding_explicit_host = []
+            self.runtime_granted_explicit_host = []
             # List of declared content script blocks (from the manifest)
             self.content_scripts = content_scripts or []
             # Dynamically registered scripts from the 'Extension Scripts' StateStore
