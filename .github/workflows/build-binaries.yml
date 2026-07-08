@@ -33,15 +33,16 @@ jobs:
             suffix: windows-x86_64
           - os: ubuntu-22.04
             suffix: linux-x86_64
-          - os: macos-latest # Apple Silicon
+          - os: macos-15 # Apple Silicon; pinned (not -latest) so the build env
+                         # doesn't silently migrate, and older OS = wider compat
             suffix: macos-arm64
           - os: macos-15-intel
             suffix: macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -83,7 +84,7 @@ jobs:
             cp dist-ci/hindsight_gui "upload/hindsight_gui-${{ matrix.suffix }}"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.suffix }}
           path: upload/*
@@ -95,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: upload
           merge-multiple: true
