@@ -5,7 +5,7 @@
 #   DNR Extension Rules/<id>/rules.json by get_dnr_extension_rules) into the
 #   Interpretation field: the rule's action plus its main condition target.
 #
-# Plugin Author: Ryan Benson (ryan@dfir.blog)
+# Plugin Author: Ryan Benson (ryan@hindsig.ht)
 #
 ###################################################################################################
 

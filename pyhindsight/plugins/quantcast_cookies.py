@@ -3,7 +3,7 @@
 # quantcast_cookies.py
 #   Interpret Quantcast cookies* (parsing partially complete)
 #
-# Plugin Author: Ryan Benson (ryan@obsidianforensics.com)
+# Plugin Author: Ryan Benson (ryan@hindsig.ht)
 #
 ###################################################################################################
 

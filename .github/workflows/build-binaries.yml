@@ -1,9 +1,12 @@
 # Builds one-file Hindsight binaries for Windows, Linux, and macOS with PyInstaller.
 #
 # Triggers on pushing a release tag (v*) — binaries are attached to the matching
-# GitHub release (or a draft release is created if one doesn't exist yet).
+# GitHub release (or a draft release is created if one doesn't exist yet), and the
+# sdist + wheel are published to PyPI via trusted publishing (no token secret;
+# requires the trusted publisher configured on PyPI for this repo/workflow with
+# environment "pypi").
 # Can also be run manually (workflow_dispatch) to get binaries as workflow artifacts
-# without cutting a release.
+# without cutting a release (no PyPI publish).
 #
 # Notes:
 # - Linux builds on the oldest available Ubuntu runner: PyInstaller binaries require
@@ -107,3 +110,28 @@ jobs:
         run: |
           gh release upload "$GITHUB_REF_NAME" upload/* --clobber --repo "$GITHUB_REPOSITORY" \
             || gh release create "$GITHUB_REF_NAME" upload/* --draft --generate-notes --repo "$GITHUB_REPOSITORY"
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build # don't publish if any platform binary failed to build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pyhindsight/
+    permissions:
+      contents: read
+      id-token: write # required for PyPI trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build
+          python -m build
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

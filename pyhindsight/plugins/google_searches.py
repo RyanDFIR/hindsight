@@ -3,7 +3,7 @@
 # google_searches.py
 #   Extracts parameters from Google search URLs
 #
-# Plugin Author: Ryan Benson (ryan@obsidianforensics.com)
+# Plugin Author: Ryan Benson (ryan@hindsig.ht)
 #
 ###################################################################################################
 

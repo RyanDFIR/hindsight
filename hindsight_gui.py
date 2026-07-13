@@ -170,7 +170,7 @@ def do_run():
 
     # Hindsight version info
     log.info(
-        '\n' + '#' * 80 + '\n###  Hindsight v{} (https://github.com/obsidianforensics/hindsight)  ###\n'
+        '\n' + '#' * 80 + '\n###  Hindsight v{} (https://github.com/RyanDFIR/hindsight)  ###\n'
         .format(pyhindsight.__version__) + '#' * 80)
 
     if 'windows' in ui_selected_decrypts:

@@ -10,7 +10,7 @@
 #   "bigip_cookie_decoder.py" by z0mbiehunt3r (https://github.com/trietptm/loadbalancer-finder/blob/master/
 #      loadbalancer-finder/src/methods/bigip_cookie_decoder.py)
 #
-# Plugin Author: Ryan Benson (ryan@obsidianforensics.com), based on work by:
+# Plugin Author: Ryan Benson (ryan@hindsig.ht), based on work by:
 #   Adam Maxwell (catalyst256@gmail.com)
 #   Alejandro Nolla Blanco (alejandro.nolla@gmail.com)
 #   Daniel Grootveld (danielg75@gmail.com)

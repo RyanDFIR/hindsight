@@ -3,7 +3,7 @@
 # generic_timestamps.py
 #   If cookie data looks like it might be a timestamp, try to decode it
 #
-# Plugin Author: Ryan Benson (ryan@obsidianforensics.com)
+# Plugin Author: Ryan Benson (ryan@hindsig.ht)
 #
 ###################################################################################################
 
