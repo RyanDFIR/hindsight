@@ -29,7 +29,7 @@
                 <td><a href="/"><span class="logo-text">Hindsight&nbsp</span><span class="logo-version">v{{hindsight_version}}</span></a></td>
                 <td align="right">
                     <span class="social-logos logo-bars">
-                        <a href="https://github.com/obsidianforensics/hindsight" target="_blank"><img class="social-logo" src="static/github.png" title="View the code on GitHub"></a> |
+                        <a href="https://github.com/RyanDFIR/hindsight" target="_blank"><img class="social-logo" src="static/github.png" title="View the code on GitHub"></a> |
                         <a href="https://infosec.exchange/@RyanDFIR" target="_blank"><img class="social-logo" src="static/mastodon.svg" title="Say Hi!"></a>
                     </span>
                 </td>

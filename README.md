@@ -9,7 +9,7 @@ For Firefox profiles, Hindsight parses ``places.sqlite`` (history visits, bookma
 
 It has a simple web UI - to start it, run "hindsight_gui.py" (or on Windows, the packaged "hindsight_gui.exe") and visit http://localhost:8080 in a browser:  
 
-<img src="documentation/interface-v2.gif"/>
+<img src="https://raw.githubusercontent.com/RyanDFIR/hindsight/main/documentation/interface-v2.gif"/>
 
 The only field you are required to complete is "Profile Path". This is the location of the Chrome profile you want to analyze (the default profile paths for different OSes is listed at the bottom of this page). Click "Run" and you'll be taken to the results page in where you can save the results to a spreadsheet (or other formats). 
 
@@ -23,7 +23,7 @@ pip install git+https://github.com/cclgroupltd/ccl_chromium_reader.git
 
 If you'd like to use the "View SQLite DB in Browser" feature in the Hindsight web interface, you'll need to run another install command:
 ```sh
-curl -sSL https://raw.githubusercontent.com/obsidianforensics/hindsight/master/install-js.sh | sh
+curl -sSL https://raw.githubusercontent.com/RyanDFIR/hindsight/main/install-js.sh | sh
 ```
 
 ## Command Line
@@ -58,4 +58,4 @@ The Chrome default profile folder default locations are:
 
 ## Feature Requests
 
-Please [file an issue](https://github.com/obsidianforensics/hindsight/issues/new/choose) if you have an idea for a new feature (or spotted something broken).
+Please [file an issue](https://github.com/RyanDFIR/hindsight/issues/new/choose) if you have an idea for a new feature (or spotted something broken).

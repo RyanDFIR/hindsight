@@ -3,7 +3,7 @@
 # chrome_extensions.py
 #   Adds the name and description of each Chrome extension found to the Interpretation field
 #
-# Plugin Author: Ryan Benson (ryan@dfir.blog)
+# Plugin Author: Ryan Benson (ryan@hindsig.ht)
 #
 ###################################################################################################
 

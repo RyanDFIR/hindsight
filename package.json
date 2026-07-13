@@ -12,14 +12,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/obsidianforensics/hindsight.git"
+    "url": "git+https://github.com/RyanDFIR/hindsight.git"
   },
   "author": "",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/obsidianforensics/hindsight/issues"
+    "url": "https://github.com/RyanDFIR/hindsight/issues"
   },
-  "homepage": "https://github.com/obsidianforensics/hindsight#readme",
+  "homepage": "https://github.com/RyanDFIR/hindsight#readme",
   "dependencies": {
     "sqlite-view": "^v0.2.0"
   },

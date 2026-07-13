@@ -3,7 +3,7 @@
 # query_string_parser.py
 #   Extracts the query string from a URL and prints each parameter and value.
 #
-# Plugin Author: Your Name Here (ryan@obsidianforensics.com)
+# Plugin Author: Ryan Benson (ryan@hindsig.ht)
 #
 ###################################################################################################
 

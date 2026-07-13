@@ -10,7 +10,7 @@
 # Blog post explaining plugin:
 #   https://web.archive.org/web/20131112222848/http://www.obsidianforensics.com/blog/detecting-clock-changes-using-cookies/
 #
-# Plugin Author: Ryan Benson (ryan@obsidianforensics.com)
+# Plugin Author: Ryan Benson (ryan@hindsig.ht)
 #
 ###################################################################################################
 
