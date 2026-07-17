@@ -966,7 +966,10 @@ class Chrome(WebBrowser):
                     base_cookie.url += f' ({base_cookie.top_frame_site_key})'
 
                 base_cookie.source_item = source_item
-                base_cookie.last_update_utc = utils.to_datetime(row.get('last_update_utc'), self.timezone)
+                # Pre-v103 cookie DBs have no last_update_utc column; none_if_unset avoids
+                # logging a parse warning per row and fabricating an epoch-0 timestamp.
+                base_cookie.last_update_utc = utils.to_datetime(
+                    row.get('last_update_utc'), self.timezone, none_if_unset=True)
                 zero_timestamp = utils.to_datetime(0, self.timezone)
 
                 # Create the row for when the cookie was created
@@ -4560,7 +4563,7 @@ class Chrome(WebBrowser):
     def get_transport_security(self, path, dir_name):
         result_list = []
 
-        # Use the URLs from other previously-processed artifacts to generate hashes of domains
+        # Use the URLs from other previously processed artifacts to generate hashes of domains
         # in the form Chrome uses as the 'host' identifier.
         self.build_hsts_domain_hashes()
 
@@ -4582,8 +4585,8 @@ class Chrome(WebBrowser):
             ts_json = json.loads(f.read())
 
             # As of now (2021), there are two versions of the TransportSecurity JSON file.
-            # Version 2 has a top level "version" key (with a value of 2), and version 1
-            # has the HSTS domain hashes as top level keys.
+            # Version 2 has a top-level "version" key (with a value of 2), and version 1
+            # has the HSTS domain hashes as top-level keys.
 
             # Version 2
             if ts_json.get('version'):
