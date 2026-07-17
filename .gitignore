@@ -15,3 +15,4 @@ pyhindsight/static/web_modules/
 hindsight-temp/
 data-sets/
 /temp_outputs/
+/test-fixtures/
