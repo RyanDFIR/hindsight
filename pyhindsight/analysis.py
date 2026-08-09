@@ -72,7 +72,7 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Last Visited Time'
             item['data_type'] = 'chrome:history:page_visited'
             item['url_hidden'] = 'true' if item['hidden'] else 'false'
-            if item['visit_duration'] == 'None':
+            if item.get('visit_duration') == 'None':
                 del (item['visit_duration'])
 
             item['message'] = f"{item['url']} ({item['title']}) [count: {item['visit_count']}]"
@@ -213,7 +213,7 @@ class HindsightEncoder(json.JSONEncoder):
             item['data'] = item['value'] if item['value'] != '<encrypted>' else ''
             item['url'] = item['url'].lstrip('.')
             item['url'] = f'https://{item["url"]}' if item['secure'] else f'http://{item["url"]}'
-            if item['expires_utc'] == '1970-01-01T00:00:00+00:00':
+            if item.get('expires_utc') == '1970-01-01T00:00:00+00:00':
                 del(item['expires_utc'])
             # Convert these from 1/0 to true/false to match Plaso
             item['secure'] = 'true' if item['secure'] else 'false'
