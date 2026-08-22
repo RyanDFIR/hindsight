@@ -1984,7 +1984,12 @@ class Chrome(WebBrowser):
                             log.error(f' - ValueError ({e}) when processing {database}')
 
                         except Exception as e:
-                            log.error(f' - Unexpected Exception: {e}')
+                            # This aborts the rest of this object store's records, so name
+                            # what was being read and how far it got -- otherwise there is
+                            # no way to tell which data is missing from the output.
+                            log.error(f' - Unexpected Exception ({e}) when processing '
+                                      f'{database}.{obj_store_name}; '
+                                      f'{len(results)} records parsed before the failure')
             except ValueError as e:
                 log.error(f' - {e} when processing {storage_directory}')
                 continue
@@ -4676,7 +4681,9 @@ class Chrome(WebBrowser):
                 log.warning(f'KG API connection error: {e.reason}')
                 break
             except Exception as e:
-                log.warning(f'KG API error: {e}')
+                # The request URL carries the API key, and some exceptions echo it back;
+                # scrub it so the key can't reach the log via an error message.
+                log.warning(f'KG API error: {str(e).replace(api_key, "<redacted>")}')
                 break
 
         resolved_count = sum(1 for v in self.kg_entities.values() if v is not None)
@@ -5002,11 +5009,14 @@ class Chrome(WebBrowser):
 
         # Clean temp directory after processing profile
         if not self.no_copy:
-            log.info(f'Deleting temporary directory {self.temp_dir}')
-            try:
-                shutil.rmtree(self.temp_dir)
-            except Exception as e:
-                log.error(f'Exception deleting temporary directory: {e}')
+            # The directory is only created when a database is actually copied into it,
+            # so its absence is normal rather than an error worth reporting.
+            if os.path.isdir(self.temp_dir):
+                log.info(f'Deleting temporary directory {self.temp_dir}')
+                try:
+                    shutil.rmtree(self.temp_dir)
+                except Exception as e:
+                    log.error(f'Exception deleting temporary directory: {e}')
 
     class URLItem(WebBrowser.URLItem):
         def decode_transition(self):
