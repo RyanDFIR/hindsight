@@ -1153,72 +1153,183 @@ class Firefox(WebBrowser):
         }
         self.installed_extensions = {'data': results, 'presentation': presentation}
 
-    def _walk_sessionstore(self, doc, source_label, source_item, results):
-        # Emit one SessionItem per navigation entry so the timeline shows tab
-        # history rather than just the currently selected URL.
-        zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
+    # Firefox 'sizemode' -> the Chrome-style window state labels the Sessions sheet uses.
+    SESSIONSTORE_SIZEMODES = {
+        'normal': 'Normal', 'minimized': 'Minimized',
+        'maximized': 'Maximized', 'fullscreen': 'Fullscreen',
+    }
 
-        def _emit_entries(entries, window_idx, tab_idx, selected_index,
-                           tab_last_accessed_ms, row_label):
+    @staticmethod
+    def _window_signature(window):
+        """Content identity of a window: what it was showing, ignoring when.
+
+        Deliberately excludes lastAccessed. Firefox rewrites recovery.jsonlz4 every few
+        seconds, so the same tab layout is saved repeatedly with a *different* focus time
+        each time. Keying on content collapses the repeated layout on the Sessions sheet
+        while those differing timestamps stay intact as separate Timeline events.
+        """
+        tabs = []
+        for tab in window.get('tabs', []) or []:
+            urls = tuple(e.get('url') for e in (tab.get('entries') or []) if e.get('url'))
+            tabs.append((urls, tab.get('index'), bool(tab.get('pinned'))))
+        return repr(tabs)
+
+    @staticmethod
+    def _collapse_duplicate_session_items(items):
+        """Merge session rows that describe the same event in more than one snapshot.
+
+        The key keeps the timestamp, so a tab re-focused between saves stays as separate
+        events -- Firefox rewrites recovery.jsonlz4 every few seconds and those differing
+        lastAccessed values are real. Only genuinely identical rows merge, and the merged
+        row lists every snapshot it was found in rather than losing that provenance.
+        """
+        merged = {}
+        for item in items:
+            key = (item.row_type, item.url, item.timestamp,
+                   item.session_id, item.nav_index)
+            kept = merged.get(key)
+            if kept is None:
+                merged[key] = item
+                item.source_item = [item.source_item]
+            elif item.source_item not in kept.source_item:
+                kept.source_item.append(item.source_item)
+
+        collapsed = list(merged.values())
+        for item in collapsed:
+            item.source_item = ', '.join(item.source_item)
+        return collapsed
+
+    def _walk_sessionstore(self, doc, source_label, source_item, results, structure,
+                           seen_windows):
+        """Parse one sessionstore document into Timeline items and session structure.
+
+        A tab's back/forward entries are structural, not events: Firefox records
+        lastAccessed on the *tab*, so only the selected entry has a real time. Those
+        entries are rendered on the Sessions sheet (grouped window -> tab -> nav stack,
+        ordered by nav index), which is why they no longer need a timestamp at all.
+        Only entries that carry a genuine timestamp are also emitted to the Timeline.
+
+        A profile keeps several sessionstore snapshots (current, previous, recovery,
+        recovery.bak, upgrade-*) and they overlap heavily -- often the same window saved
+        moments apart. Windows are therefore keyed by content: the first snapshot to show
+        a given layout defines it, and later snapshots holding the same layout only add
+        their filename to its provenance. Snapshots whose content genuinely differs (an
+        upgrade snapshot weeks older, say) still get their own window, so nothing is
+        merged into a state that never existed.
+        """
+
+        def _emit_entries(entries, window_id, tab_id, selected_index,
+                          tab_last_accessed_ms, skip_structure=False):
+            nav_stack = {}
             for nav_idx, entry in enumerate(entries or []):
                 url = entry.get('url')
                 if not url:
                     continue
                 title = entry.get('title') or ''
                 referrer = entry.get('referrer') or entry.get('originalURI') or ''
-                # Only the selected nav-entry gets a real timestamp; others sort to epoch 0.
-                if nav_idx + 1 == selected_index and tab_last_accessed_ms:
-                    ts = utils.to_datetime(tab_last_accessed_ms * 1000, self.timezone)
-                else:
-                    ts = zero_ts
+                is_selected = nav_idx + 1 == selected_index
+
+                # The Sessions sheet orders the stack by nav index, so it needs no time.
+                nav_stack[nav_idx] = (url, title, None)
+                structure['entries_seen'] += 1
+
+                # Only the selected entry has a real timestamp (the tab's lastAccessed);
+                # the rest would have to invent one, so they stay off the Timeline.
+                if not (is_selected and tab_last_accessed_ms):
+                    continue
 
                 item = Firefox.SessionItem(
                     profile=self.profile_path,
                     url=url,
                     title=title,
-                    timestamp=ts,
-                    session_id=f'win{window_idx}.tab{tab_idx}',
+                    timestamp=utils.to_datetime(tab_last_accessed_ms * 1000, self.timezone),
+                    session_id=tab_id,
                     nav_index=nav_idx,
                     referrer_url=referrer,
                     original_request_url=entry.get('originalURI'),
                     source_path=source_item,
                 )
-                item.row_type = row_label
+                # The snapshot file is already reported in Source Item; keeping it out of
+                # row_type stops each upgrade.jsonlz4-<ts> minting its own type string.
+                item.row_type = 'session (open tab)'
                 item.value = ''
                 item.source_item = source_item
-                item.transition_type = (
-                    'selected' if nav_idx + 1 == selected_index else 'history'
-                )
+                item.transition_type = 'selected'
                 results.append(item)
 
-        for w_idx, window in enumerate(doc.get('windows', []) or []):
-            for t_idx, tab in enumerate(window.get('tabs', []) or []):
-                _emit_entries(
-                    tab.get('entries', []), w_idx, t_idx,
-                    tab.get('index'), tab.get('lastAccessed'),
-                    f'session (open tab, {source_label})')
+            if nav_stack and not skip_structure:
+                structure['tab_nav_stacks'][tab_id] = nav_stack
+                sel_nav = (selected_index - 1) if selected_index else None
+                current = nav_stack.get(sel_nav) or nav_stack[max(nav_stack)]
+                structure['tab_current_urls'][tab_id] = (current[0], current[1])
 
+        for w_idx, window in enumerate(doc.get('windows', []) or []):
+            signature = self._window_signature(window)
+            known = seen_windows.get(signature)
+            if known:
+                # Same layout as a window already recorded; note this snapshot as another
+                # place it survives rather than drawing it a second time.
+                window_id = known
+                sources = structure['windows'][window_id]['sources']
+                if source_label not in sources:
+                    sources.append(source_label)
+            else:
+                window_id = f'w{len(seen_windows)}'
+                seen_windows[signature] = window_id
+                width, height = window.get('width'), window.get('height')
+                bounds = ''
+                if width and height:
+                    bounds = (f'{width}x{height} at '
+                              f'({window.get("screenX", 0)},{window.get("screenY", 0)})')
+                structure['windows'][window_id] = {
+                    'type': 'Normal',
+                    'show_state': self.SESSIONSTORE_SIZEMODES.get(
+                        window.get('sizemode'), window.get('sizemode') or '?'),
+                    'bounds': bounds,
+                    'selected_tab_index': (window.get('selected') or 0) - 1,
+                    'sources': [source_label],
+                }
+
+            for t_idx, tab in enumerate(window.get('tabs', []) or []):
+                tab_id = f'{window_id}.t{t_idx}'
+                if not known:
+                    structure['tabs'][tab_id] = {
+                        'window_id': window_id,
+                        'index': t_idx,
+                        'pinned': bool(tab.get('pinned')),
+                        'selected_nav_index': (tab.get('index') or 0) - 1,
+                    }
+                # Still walked when the layout is already known: the nav stack is
+                # unchanged, but lastAccessed may differ, and that is a real event.
+                _emit_entries(
+                    tab.get('entries', []), window_id, tab_id,
+                    tab.get('index'), tab.get('lastAccessed'), skip_structure=known)
+
+            # A closed tab carries a real closedAt for the whole tab, so its entries stay
+            # on the Timeline. Without one there is no time to report, and the entry is
+            # dropped rather than dated to the epoch.
             for c_idx, closed in enumerate(window.get('_closedTabs', []) or []):
                 state = closed.get('state') or {}
                 ts_ms = closed.get('closedAt')
-                ts = utils.to_datetime(ts_ms * 1000, self.timezone) \
-                    if ts_ms else zero_ts
                 for nav_idx, entry in enumerate(state.get('entries', []) or []):
                     url = entry.get('url')
                     if not url:
+                        continue
+                    structure['entries_seen'] += 1
+                    if not ts_ms:
                         continue
                     item = Firefox.SessionItem(
                         profile=self.profile_path,
                         url=url,
                         title=entry.get('title') or '',
-                        timestamp=ts,
-                        session_id=f'win{w_idx}.closed{c_idx}',
+                        timestamp=utils.to_datetime(ts_ms * 1000, self.timezone),
+                        session_id=f'{window_id}.closed{c_idx}',
                         nav_index=nav_idx,
                         referrer_url=entry.get('referrer') or '',
                         original_request_url=entry.get('originalURI'),
                         source_path=source_item,
                     )
-                    item.row_type = f'session (closed tab, {source_label})'
+                    item.row_type = 'session (closed tab)'
                     item.value = ''
                     item.source_item = source_item
                     item.transition_type = 'closed'
@@ -1227,24 +1338,27 @@ class Firefox(WebBrowser):
         for cw_idx, cwin in enumerate(doc.get('_closedWindows', []) or []):
             for t_idx, tab in enumerate(cwin.get('tabs', []) or []):
                 ts_ms = tab.get('lastAccessed')
-                ts = utils.to_datetime(ts_ms * 1000, self.timezone) \
-                    if ts_ms else zero_ts
                 for nav_idx, entry in enumerate(tab.get('entries', []) or []):
                     url = entry.get('url')
                     if not url:
+                        continue
+                    structure['entries_seen'] += 1
+                    if not ts_ms:
                         continue
                     item = Firefox.SessionItem(
                         profile=self.profile_path,
                         url=url,
                         title=entry.get('title') or '',
-                        timestamp=ts,
-                        session_id=f'closedwin{cw_idx}.tab{t_idx}',
+                        timestamp=utils.to_datetime(ts_ms * 1000, self.timezone),
+                        # No snapshot label: the same closed window recurs across
+                        # snapshots, and identical rows are collapsed below.
+                        session_id=f'closedwin{cw_idx}.t{t_idx}',
                         nav_index=nav_idx,
                         referrer_url=entry.get('referrer') or '',
                         original_request_url=entry.get('originalURI'),
                         source_path=source_item,
                     )
-                    item.row_type = f'session (closed window, {source_label})'
+                    item.row_type = 'session (closed window)'
                     item.value = ''
                     item.source_item = source_item
                     item.transition_type = 'closed'
@@ -1277,6 +1391,15 @@ class Firefox(WebBrowser):
             log.info(' - No sessionstore files found')
             return
 
+        # Snapshots overlap heavily, so every window is merged into one structure keyed
+        # by content; seen_windows maps a layout signature to the window that owns it.
+        structure = {
+            'windows': {}, 'tabs': {}, 'tab_groups': {},
+            'active_window': None, 'tab_current_urls': {}, 'tab_nav_stacks': {},
+            'entries_seen': 0,
+        }
+        seen_windows = {}
+
         for full_path, label in candidates:
             try:
                 raw = self._decompress_jsonlz4(full_path)
@@ -1287,13 +1410,39 @@ class Firefox(WebBrowser):
                 log.warning(f' - Could not parse {full_path}: {e}')
                 continue
             source_item = os.path.relpath(full_path, self.profile_path)
-            before = len(results)
-            self._walk_sessionstore(doc, label, source_item, results)
-            log.info(f' - {label}: parsed {len(results) - before} entries')
+            before = structure['entries_seen']
+            windows_before = len(seen_windows)
+            self._walk_sessionstore(doc, label, source_item, results, structure,
+                                    seen_windows)
+            if label == 'current':
+                selected = doc.get('selectedWindow')
+                if selected:
+                    live = self._window_signature(
+                        (doc.get('windows') or [{}])[selected - 1])
+                    structure['active_window'] = seen_windows.get(live)
+            log.info(f' - {label}: parsed {structure["entries_seen"] - before} entries, '
+                     f'{len(seen_windows) - windows_before} new window(s)')
 
-        self.artifacts_counts['Sessions'] = len(results)
-        log.info(f' - Parsed {len(results)} items total')
-        self.parsed_artifacts.extend(results)
+        # Record where each window survives; the Sessions sheet renders this beside the
+        # window heading, so a layout saved to several snapshots is stated, not repeated.
+        for window in structure['windows'].values():
+            window['app_name'] = f'seen in: {", ".join(window.pop("sources"))}'
+
+        deduped = self._collapse_duplicate_session_items(results)
+
+        entries_seen = structure.pop('entries_seen')
+        if structure['tabs']:
+            self.session_structure = structure
+
+        # Most navigation entries have no timestamp of their own and are rendered on the
+        # Sessions sheet only, so count what was parsed rather than what reached the
+        # Timeline.
+        self.artifacts_counts['Sessions'] = entries_seen
+        log.info(f' - Parsed {entries_seen} entries from {len(candidates)} snapshot(s) '
+                 f'into {len(structure["windows"])} distinct window(s); '
+                 f'{len(deduped)} timeline row(s) after collapsing '
+                 f'{len(results) - len(deduped)} duplicate(s)')
+        self.parsed_artifacts.extend(deduped)
 
     def get_bookmark_backups(self, path):
         # Firefox writes a fresh jsonlz4 snapshot of the bookmark tree daily and

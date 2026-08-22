@@ -951,6 +951,13 @@ class AnalysisSession(object):
                 self.version.extend(browser_analysis.version)
                 self.display_version = browser_analysis.display_version
                 self.preferences.extend(browser_analysis.preferences)
+                if hasattr(browser_analysis, 'session_structure'):
+                    if not hasattr(self, 'session_structures'):
+                        self.session_structures = []
+                    self.session_structures.append({
+                        'profile': found_profile_path,
+                        **browser_analysis.session_structure
+                    })
 
                 for item in browser_analysis.__dict__:
                     if isinstance(browser_analysis.__dict__[item], dict):
