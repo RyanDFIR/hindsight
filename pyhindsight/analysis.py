@@ -6,6 +6,9 @@ import os
 import sqlite3
 import sys
 import time
+import uuid
+import xlsxwriter
+import xlsxwriter.worksheet
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pyhindsight import __version__
@@ -23,6 +26,35 @@ import rich.table
 import rich.text
 
 log = logging.getLogger(__name__)
+
+class NoneSafeWorksheet(xlsxwriter.worksheet.Worksheet):
+    """Worksheet that renders a None value as an empty (but still formatted) cell.
+
+    xlsxwriter's typed writers raise on None -- write_string() does len(None) and
+    write_number() does isnan(None). The XLSX sheets are written column by column
+    inside a single try/except per row, so an unguarded None used to abort the row
+    *partway through*: the columns already written stayed in place and every column
+    after it was silently dropped, leaving a truncated row that still looked complete.
+
+    None is legitimate in this data rather than a parsing failure. Firefox stores NULL
+    in moz_places.title (it has no empty-string titles at all), and items read from
+    flat JSON -- e.g. an extension's DNR rules.json -- have no LevelDB seq or offset.
+    Those are absences at the source, so they are written as empty cells instead of
+    being coerced to '' or 0, which would invent a value the artifact does not contain.
+    """
+
+    # convert_cell_args preserves the base class's support for A1 notation.
+    @xlsxwriter.worksheet.convert_cell_args
+    def write_string(self, row, col, string=None, cell_format=None):
+        if string is None:
+            return self.write_blank(row, col, None, cell_format)
+        return super().write_string(row, col, string, cell_format)
+
+    @xlsxwriter.worksheet.convert_cell_args
+    def write_number(self, row, col, number=None, cell_format=None):
+        if number is None:
+            return self.write_blank(row, col, None, cell_format)
+        return super().write_number(row, col, number, cell_format)
 
 
 class HindsightEncoder(json.JSONEncoder):
@@ -793,7 +825,23 @@ class AnalysisSession(object):
         elif self.timezone is None:
             self.timezone = datetime.timezone.utc
 
-        log.debug("Options: " + str(self.__dict__))
+        # Give this run its own subdirectory of the temp directory. Copies inside it are
+        # named only after the database (<temp_dir>/History), and the default temp path is
+        # a fixed location next to the binary, so two Hindsight runs at once would write
+        # to the same <temp_dir>/History and each could end up parsing the other's profile
+        # data -- or delete the directory while the other was still reading from it.
+        # Isolating per run also keeps each run's cleanup from touching another's files.
+        if self.temp_dir:
+            self.temp_dir = os.path.join(self.temp_dir, f'run-{os.getpid()}-{uuid.uuid4().hex[:8]}')
+
+        # Redact secret values before dumping the options. Log files are routinely
+        # attached to bug reports, so the key names are kept (useful for confirming
+        # which config was picked up) but the values never reach disk.
+        loggable_options = dict(self.__dict__)
+        if loggable_options.get('api_keys'):
+            loggable_options['api_keys'] = {
+                key_name: '<redacted>' for key_name in loggable_options['api_keys']}
+        log.debug("Options: " + str(loggable_options))
 
         # Normalize the optional -b/--browser_type override. When set, it forces a
         # single family for every discovered profile (case-insensitive); when unset,
@@ -1102,8 +1150,11 @@ class AnalysisSession(object):
                             sys.path.remove(potential_plugin_path)
 
     def generate_excel(self, output_object):
-        import xlsxwriter
         workbook = xlsxwriter.Workbook(output_object, {'in_memory': True, 'strings_to_urls': False})
+        # Applies to every add_worksheet() call below (xlsxwriter falls back to this
+        # attribute when no explicit worksheet_class is passed), so a None in any column
+        # blanks that cell instead of silently dropping the rest of the row.
+        workbook.worksheet_class = NoneSafeWorksheet
 
         # Track used sheet names to avoid duplicates
         used_sheet_names = set()
@@ -2258,69 +2309,66 @@ class AnalysisSession(object):
         sync_ws.freeze_panes(2, 0)  # Freeze top row
         sync_ws.autofilter(1, 0, row_number, 9)  # Add autofilter
 
+        def render_cell(value):
+            """Render a presentation value that xlsxwriter's write() can't take directly.
+
+            write() handles scalars only, and some preference values are dicts or lists
+            (e.g. a policy object). Those used to raise and, because the whole sheet was
+            built inside one try/except, cost every remaining row on that sheet. Rendering
+            them as JSON keeps the content instead of dropping it.
+            """
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, sort_keys=True, default=str)
+            return value
+
+        def write_presentation_sheet(d, sheet_label):
+            """Render one plugin/preferences 'presentation' block as its own worksheet."""
+            sheet_name = get_unique_sheet_name(d['presentation']['title'])
+            p = workbook.add_worksheet(sheet_name)
+            title = d['presentation']['title']
+            if 'version' in d['presentation']:
+                title += f" (v{d['presentation']['version']})"
+            p.merge_range(0, 0, 0, len(d['presentation']['columns']) - 1,
+                          f"Hindsight Internet History Forensics (v{__version__}) - {title}",
+                          title_header_format)
+            for counter, column in enumerate(d['presentation']['columns']):
+                p.write(1, counter, column['display_name'], header_format)
+                if 'display_width' in column:
+                    p.set_column(counter, counter, column['display_width'])
+
+            for row_count, row in enumerate(d['data'], start=2):
+                # Caught per row, so one unrenderable value costs that row rather than
+                # silently truncating the sheet at that point.
+                try:
+                    for column_count, column in enumerate(d['presentation']['columns']):
+                        value = row[column['data_name']] if isinstance(row, dict) \
+                            else row.__dict__[column['data_name']]
+                        p.write(row_count, column_count, render_cell(value), black_type_format)
+                except Exception as e:
+                    log.warning(f'Failed to write row to {sheet_label} sheet "{sheet_name}": {e}')
+
+            # Formatting
+            p.freeze_panes(2, 0)  # Freeze top row
+            p.autofilter(1, 0, len(d['data']) + 2, len(d['presentation']['columns']) - 1)  # Add autofilter
+
         for item in self.__dict__:
+            # self.__dict__ holds every session attribute; only plugin result blocks have
+            # the {'presentation': ..., 'data': ...} shape. Select those explicitly rather
+            # than letting a bare except double as the type filter -- that swallowed real
+            # write failures too, and a whole sheet could vanish with nothing logged.
+            candidate = self.__dict__[item]
+            if not isinstance(candidate, dict) \
+                    or not candidate.get('presentation') or not candidate.get('data'):
+                continue
             try:
-                if self.__dict__[item]['presentation'] and self.__dict__[item]['data']:
-                    d = self.__dict__[item]
-                    sheet_name = get_unique_sheet_name(d['presentation']['title'])
-                    p = workbook.add_worksheet(sheet_name)
-                    title = d['presentation']['title']
-                    if 'version' in d['presentation']:
-                        title += f" (v{d['presentation']['version']})"
-                    p.merge_range(0, 0, 0, len(d['presentation']['columns']) - 1,
-                                  f"Hindsight Internet History Forensics (v{__version__}) - {title}",
-                                  title_header_format)
-                    for counter, column in enumerate(d['presentation']['columns']):
-                        # print column
-                        p.write(1, counter, column['display_name'], header_format)
-                        if 'display_width' in column:
-                            p.set_column(counter, counter, column['display_width'])
-
-                    for row_count, row in enumerate(d['data'], start=2):
-                        if not isinstance(row, dict):
-                            for column_count, column in enumerate(d['presentation']['columns']):
-                                p.write(row_count, column_count, row.__dict__[column['data_name']], black_type_format)
-                        else:
-                            for column_count, column in enumerate(d['presentation']['columns']):
-                                p.write(row_count, column_count, row[column['data_name']], black_type_format)
-
-                    # Formatting
-                    p.freeze_panes(2, 0)  # Freeze top row
-                    p.autofilter(1, 0, len(d['data']) + 2, len(d['presentation']['columns']) - 1)  # Add autofilter
-
+                write_presentation_sheet(candidate, 'plugin')
             except Exception as e:
-                pass
+                log.warning(f'Exception occurred while writing plugin page {item}: {e}')
 
-        # TODO: combine this with above function
         for item in self.__dict__.get('preferences'):
             try:
                 if item['presentation'] and item['data']:
-                    d = item
-                    sheet_name = get_unique_sheet_name(d['presentation']['title'])
-                    p = workbook.add_worksheet(sheet_name)
-                    title = d['presentation']['title']
-                    if 'version' in d['presentation']:
-                        title += f" (v{d['presentation']['version']})"
-                    p.merge_range(0, 0, 0, len(d['presentation']['columns']) - 1,
-                                  f"Hindsight Internet History Forensics (v{__version__}) - {title}",
-                                  title_header_format)
-                    for counter, column in enumerate(d['presentation']['columns']):
-                        p.write(1, counter, column['display_name'], header_format)
-                        if 'display_width' in column:
-                            p.set_column(counter, counter, column['display_width'])
-
-                    for row_count, row in enumerate(d['data'], start=2):
-                        if not isinstance(row, dict):
-                            for column_count, column in enumerate(d['presentation']['columns']):
-                                p.write(row_count, column_count, row.__dict__[column['data_name']], black_type_format)
-                        else:
-                            for column_count, column in enumerate(d['presentation']['columns']):
-                                p.write(row_count, column_count, row[column['data_name']], black_type_format)
-
-                    # Formatting
-                    p.freeze_panes(2, 0)  # Freeze top row
-                    p.autofilter(1, 0, len(d['data']) + 2, len(d['presentation']['columns']) - 1)  # Add autofilter
-
+                    write_presentation_sheet(item, 'Preferences')
             except Exception as e:
                 log.warning(f"Exception occurred while writing Preferences page: {e}")
 
