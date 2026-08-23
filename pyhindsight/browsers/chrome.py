@@ -17,7 +17,7 @@ import puremagic
 import base64
 import ccl_chromium_reader
 
-from pyhindsight.browsers.webbrowser import WebBrowser
+from pyhindsight.browsers.webbrowser import WebBrowser, timeline_sort_key
 from pyhindsight import utils
 
 # Try to import optional modules - do nothing on failure, as status is tracked elsewhere
@@ -1346,6 +1346,37 @@ class Chrome(WebBrowser):
         log.info(f' - Parsed {len(results)} items from {len(filtered_listing)} files')
         self.parsed_storage.extend(results)
 
+    # A SNSS LastActiveTime below this is base::TimeTicks, not a wall-clock time.
+    # Chrome originally wrote this field as base::TimeTicks -- microseconds from an
+    # arbitrary origin (in practice, boot) -- and later switched to base::Time, the usual
+    # Webkit microseconds since 1601. The two are four orders of magnitude apart: ticks
+    # top out around a few weeks of uptime (the largest seen was ~12 days), while any
+    # real base::Time is >1.3e16. Across a 71-profile corpus no value fell between them
+    # and no single profile mixed the two, so magnitude identifies the encoding.
+    SESSION_LAST_ACTIVE_WALL_CLOCK_MIN = 1_000_000_000_000_000
+
+    @classmethod
+    def interpret_last_active_time(cls, active_time, timezone):
+        """Read a SNSS LastActiveTime value, returning (timestamp, note).
+
+        Reading the tick form as a date is what produced impossible tab-last-active
+        timestamps (1971, 1973, 2585) and outright conversion failures. Ticks order tab
+        activity within a single boot and carry no date at all, so none is invented for
+        them; the raw value is reported instead, and the row sorts to the end of the
+        Timeline with the other un-timestamped artifacts.
+        """
+        if active_time >= cls.SESSION_LAST_ACTIVE_WALL_CLOCK_MIN:
+            # base::Time -- a genuine wall-clock timestamp.
+            parsed_time = utils.to_datetime(active_time, timezone, none_on_failure=True)
+            if parsed_time is not None:
+                return parsed_time, None
+            return None, f'unparsed timestamp value: {active_time}'
+
+        elapsed = datetime.timedelta(microseconds=abs(active_time))
+        return None, (f'monotonic tick value {active_time} ({elapsed} from the tick '
+                      f'origin); orders tab activity within a session, not a '
+                      f'wall-clock time')
+
     def get_sessions(self, path, dir_name):
         results = []
 
@@ -1712,11 +1743,18 @@ class Chrome(WebBrowser):
                                 active_time = struct.unpack('<q', payload[8:16])[0]
                                 if active_time == 0:
                                     continue
+                                parsed_time, note = self.interpret_last_active_time(
+                                    active_time, self.timezone)
                                 item = Chrome.SessionItem(
                                     self.profile_path, url='', title='',
-                                    timestamp=utils.to_datetime(active_time, self.timezone), session_id=tab_id,
+                                    timestamp=parsed_time, session_id=tab_id,
                                     source_path=file_path)
                                 item.row_type = 'session (tab last active)'
+                                if note:
+                                    # Keep the raw value: the row still ties a tab to a
+                                    # last-active record, and the Window/Tab IDs point at
+                                    # that tab on the Sessions sheet.
+                                    item.value = note
                                 item.source_item = source_item
                                 results.append(item)
 
@@ -1787,6 +1825,7 @@ class Chrome(WebBrowser):
         tab_nav_stacks = {}
         for item in results:
             if item.session_id is not None and item.url and item.nav_index is not None \
+                    and item.timestamp is not None \
                     and 'navigation' in getattr(item, 'row_type', ''):
                 stack = tab_nav_stacks.setdefault(item.session_id, {})
                 # Keep the latest entry for each nav_index (by timestamp)
@@ -4375,7 +4414,10 @@ class Chrome(WebBrowser):
                 matched_url = self.origin_hashes.get(item['key'].decode(), f'MD5 of origin: {item["key"].decode()}')
 
                 sc_record = Chrome.SiteSetting(
-                    self.profile_path, url=matched_url, timestamp=utils.to_datetime(last_loaded, self.timezone),
+                    # A deleted record carries no proto and so no last_loaded; none_if_unset
+                    # leaves those un-timestamped rather than dating them to the epoch.
+                    self.profile_path, url=matched_url,
+                    timestamp=utils.to_datetime(last_loaded, self.timezone, none_if_unset=True),
                     key=f'Status: {item["state"]}', value=str(parsed_proto), interpretation='')
                 sc_record.row_type += ' (characteristic)'
                 sc_record.source_item = source_item
@@ -5004,7 +5046,7 @@ class Chrome(WebBrowser):
                 if artifact.entity_ids:
                     artifact.entities_str = _resolve_ids(artifact.entity_ids)
 
-        self.parsed_artifacts.sort()
+        self.parsed_artifacts.sort(key=timeline_sort_key)
         self.parsed_storage.sort()
 
         # Clean temp directory after processing profile

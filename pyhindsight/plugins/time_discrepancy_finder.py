@@ -80,6 +80,8 @@ def plugin(analysis_session=None):
                             if m:
                                 server = to_datetime(m.group(1), datetime.timezone.utc)
                                 local = item.timestamp
+                                if local is None:
+                                    continue  # no local time to compare the server one against
                                 delta = abs(server - local)
                                 item.interpretation = 'Server-side Timestamp: {} | Local Timestamp: {} | ' \
                                                       'Difference: {} [Time Discrepancy]'.format(server, local, delta)
@@ -91,6 +93,8 @@ def plugin(analysis_session=None):
                     if m:
                         server = to_datetime(m.group(1), datetime.timezone.utc)
                         local = item.timestamp
+                        if local is None:
+                            continue  # no local time to compare the server one against
                         delta = abs(server - local)
                         item.interpretation = 'Server-side Timestamp: {} | Local Timestamp: {} | ' \
                                               'Difference: {} [Time Discrepancy]'.format(server, local, delta)

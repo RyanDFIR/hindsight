@@ -15,7 +15,7 @@ from pyhindsight import __version__
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.browsers.brave import Brave
 from pyhindsight.browsers.firefox import Firefox
-from pyhindsight.browsers.webbrowser import WebBrowser
+from pyhindsight.browsers.webbrowser import WebBrowser, timeline_sort_key
 from pyhindsight.utils import friendly_date
 import pyhindsight.plugins
 import rich.align
@@ -440,7 +440,12 @@ class HindsightEncoder(json.JSONEncoder):
         if isinstance(obj, WebBrowser.CacheItem):
             item = HindsightEncoder.base_encoder(obj)
 
-            item['timestamp_desc'] = 'Last Visit Time'
+            # A cache entry whose source recorded no fetch time gets the epoch that
+            # base_encoder substitutes (Timesketch requires a datetime on every event).
+            # Calling that "Last Visit Time" would assert a 1970 visit that never
+            # happened, so it is labelled the same way as the other timeless records.
+            item['timestamp_desc'] = \
+                'Last Visit Time' if obj.timestamp is not None else 'Not a time'
             item['data_type'] = 'chrome:cache:entry'
             item['source_long'] = 'Chrome Cache'
             item['original_url'] = item['url']
@@ -1316,7 +1321,7 @@ class AnalysisSession(object):
         # Start at the row after the headers and begin writing out the items in parsed_artifacts
         row_number = 2
         seen_session_form_data = set()  # dedup key: (url, name, type, value)
-        for item in sorted(self.parsed_artifacts):
+        for item in sorted(self.parsed_artifacts, key=timeline_sort_key):
             try:
                 if item.row_type.startswith("url"):
                     w.write_string(row_number, 0, item.row_type, black_type_format)  # record_type
@@ -1595,9 +1600,6 @@ class AnalysisSession(object):
                     w.write(row_number, 6, item.profile, blue_value_format)  # Profile
                     w.write(row_number, 7, item.source_item or '', blue_value_format)  # Source Item
 
-                if friendly_date(item.timestamp) < '1970-01-02':
-                    w.set_row(row_number, options={'hidden': True})
-
             except Exception as e:
                 log.error(f'Failed to write row to XLSX: {e}')
 
@@ -1605,8 +1607,9 @@ class AnalysisSession(object):
 
         # Formatting
         w.freeze_panes(2, 0)  # Freeze top row
+        # Items with no usable timestamp are sorted to the end (see timeline_sort_key)
+        # rather than dated to the epoch and hidden, so no row filter is applied here.
         w.autofilter(1, 0, row_number, 31)  # Add autofilter
-        w.filter_column('B', 'Timestamp > 1970-01-02')
 
         ##############################
         # Storage worksheet
@@ -2812,6 +2815,28 @@ class AnalysisSession(object):
             def is_empty(value):
                 return value is None or value == ''
 
+            def sql_date(value):
+                """Normalize a date column value: absent becomes NULL, never ''.
+
+                SQL treats the two very differently. '' sorts before every real date, so
+                it is silently swept into any `timestamp < ...` range query, and MIN()
+                and COUNT(column) count it as a value -- MIN() over a table with any ''
+                returns '' rather than the earliest event. NULL is excluded from
+                comparisons and aggregates, which is what a query against this table is
+                expecting, and it lets a consumer say ORDER BY ... NULLS LAST.
+
+                Datetimes are formatted here rather than left to sqlite3's default
+                adapter, which is deprecated since Python 3.12 and due for removal.
+                str() reproduces exactly what that adapter wrote, so stored values are
+                unchanged -- the source artifact's own precision is preserved rather
+                than being reformatted.
+                """
+                if value is None or value == '':
+                    return None
+                if isinstance(value, datetime.datetime):
+                    return str(value)
+                return value
+
             for item in self.parsed_artifacts:
                 if item.row_type.startswith('url'):
                     c.execute(
@@ -2819,7 +2844,7 @@ class AnalysisSession(object):
                         'visit_source, visit_id, from_visit, opener_visit, visit_duration, visit_count, typed_count, '
                         'url_hidden, transition) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.name, item.interpretation,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.interpretation,
                          item.profile, item.source_item, item.visit_source, item.visit_id, item.from_visit,
                          item.opener_visit, item.visit_duration, item.visit_count, item.typed_count, item.hidden,
                          item.transition_friendly))
@@ -2835,14 +2860,14 @@ class AnalysisSession(object):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.title,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.title,
                          media_message, item.interpretation, item.profile, item.source_item))
 
                 elif item.row_type.startswith('autofill'):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.name, item.value, item.interpretation,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.name, item.value, item.interpretation,
                          item.profile, item.source_item))
 
                 elif item.row_type.startswith('download'):
@@ -2851,9 +2876,9 @@ class AnalysisSession(object):
                         'interrupt_reason, danger_type, opened, etag, last_modified, '
                         'mime_type, referrer, tab_url, download_source, hash, guid, http_headers) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.status_friendly, item.value,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.status_friendly, item.value,
                          item.interpretation, item.profile, item.source_item, item.interrupt_reason_friendly,
-                         item.danger_type_friendly, item.opened, item.etag, item.last_modified,
+                         item.danger_type_friendly, item.opened, item.etag, sql_date(item.last_modified),
                          getattr(item, 'mime_type', None), getattr(item, 'referrer', None),
                          getattr(item, 'tab_url', None), getattr(item, 'download_source', None),
                          getattr(item, 'hash', None), getattr(item, 'guid', None),
@@ -2863,28 +2888,28 @@ class AnalysisSession(object):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.name, item.value,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
                 elif item.row_type.startswith('bookmark'):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.name, item.value,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
                 elif item.row_type.startswith('cookie'):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.name, item.value,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
                 elif item.row_type.startswith('local storage'):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.name, item.value,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
                 elif item.row_type.startswith('cache'):
@@ -2892,22 +2917,22 @@ class AnalysisSession(object):
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item, '
                         'etag, last_modified, http_headers)'
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.data_summary,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.data_summary,
                          item.locations, item.interpretation, item.profile, item.source_item,
-                         item.etag, item.last_modified, item.http_headers_str))
+                         item.etag, sql_date(item.last_modified), item.http_headers_str))
 
                 elif item.row_type.startswith('login'):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.name, item.value,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
                 elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session', 'permission action', 'profile creation')):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, friendly_date(item.timestamp), item.url, item.name, item.value,
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
             for item in self.parsed_storage:
@@ -2916,7 +2941,7 @@ class AnalysisSession(object):
                         'INSERT INTO storage (type, origin, key, value, modification_time, '
                         'interpretation, profile, source_path, seq, state, state_friendly) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, item.origin, item.key, item.value, item.last_modified,
+                        (item.row_type, item.origin, item.key, item.value, sql_date(item.last_modified),
                          item.interpretation, item.profile, item.source_path, item.seq,
                          state_to_int(item.state), item.state))
 
@@ -2934,7 +2959,7 @@ class AnalysisSession(object):
                         'interpretation, profile, source_path, seq, state, state_friendly, file_exists, file_size, '
                         'magic_results) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, item.origin, item.key, item.value, item.last_modified,
+                        (item.row_type, item.origin, item.key, item.value, sql_date(item.last_modified),
                          item.interpretation, item.profile, item.source_path, item.seq,
                          state_to_int(item.state), item.state,
                          item.file_exists, item.file_size, item.magic_results))
