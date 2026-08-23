@@ -4,6 +4,7 @@ import json
 import re
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.utils import to_datetime
+from pyhindsight.browsers.webbrowser import timeline_sort_key
 
 log = logging.getLogger(__name__)
 
@@ -142,4 +143,4 @@ class Brave(Chrome):
         # have a cardiac arrest on the non-unicode binary data.
         self.cached_key = None
 
-        self.parsed_artifacts.sort()
+        self.parsed_artifacts.sort(key=timeline_sort_key)

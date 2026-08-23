@@ -10,7 +10,7 @@ import struct
 import urllib.parse
 
 from pyhindsight import utils
-from pyhindsight.browsers.webbrowser import WebBrowser
+from pyhindsight.browsers.webbrowser import WebBrowser, timeline_sort_key
 
 log = logging.getLogger(__name__)
 
@@ -2097,13 +2097,20 @@ class Firefox(WebBrowser):
                 skipped += 1
                 continue
 
-            try:
-                request_time = datetime.datetime.fromtimestamp(
-                    parsed['last_fetched'], datetime.timezone.utc)
-                if self.timezone:
-                    request_time = request_time.astimezone(self.timezone)
-            except (OSError, OverflowError, ValueError):
-                request_time = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
+            # Firefox stores 0 when it recorded no fetch time for an entry. That is an
+            # absent value rather than a 1970 fetch, so the entry is left un-timestamped
+            # (it sorts to the end of the Timeline) instead of being dated to the epoch.
+            raw_last_fetched = parsed.get('last_fetched')
+            if not raw_last_fetched:
+                request_time = None
+            else:
+                try:
+                    request_time = datetime.datetime.fromtimestamp(
+                        raw_last_fetched, datetime.timezone.utc)
+                    if self.timezone:
+                        request_time = request_time.astimezone(self.timezone)
+                except (OSError, OverflowError, ValueError):
+                    request_time = None
 
             content_type = parsed['headers'].get('content-type')
             data_size = parsed['data_size']
@@ -3064,7 +3071,7 @@ class Firefox(WebBrowser):
                     self.profile_path, 'protections.sqlite',
                     display_key='Content Blocking', display_value='Content-blocking event records')
 
-        self.parsed_artifacts.sort()
+        self.parsed_artifacts.sort(key=timeline_sort_key)
 
     class URLItem(WebBrowser.URLItem):
         pass

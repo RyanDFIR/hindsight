@@ -1,4 +1,5 @@
 import abc
+import datetime
 import hashlib
 import logging
 import sqlite3
@@ -15,6 +16,27 @@ import rich.text
 from pyhindsight import utils
 
 log = logging.getLogger(__name__)
+
+# Sorts before any real timestamp; only ever used to order un-timestamped items among
+# themselves, never rendered.
+_UNTIMED_PLACEHOLDER = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+
+
+def timeline_sort_key(item):
+    """Order artifacts by time, putting items that have no timestamp at the end.
+
+    An artifact with no usable time is still evidence, so it is neither dropped nor given
+    an invented date. Sorting it last keeps the Timeline opening on real activity instead
+    of on a block of placeholder values, which is why those rows previously had to be
+    hidden. `timestamp is None` sorts after every real datetime because False < True.
+    """
+    timestamp = getattr(item, 'timestamp', None)
+    if timestamp is None:
+        return True, _UNTIMED_PLACEHOLDER
+    if timestamp.tzinfo is None:
+        # Defensive: mixing naive and aware datetimes raises during comparison.
+        timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
+    return False, timestamp
 
 
 class ProcessingDisplay:
@@ -301,6 +323,10 @@ class WebBrowser(object):
             self.source_item = None
 
         def __lt__(self, other):
+            # An item with no timestamp sorts after everything that has one.
+            if self.timestamp is None or other.timestamp is None:
+                return timeline_sort_key(self) < timeline_sort_key(other)
+
             if not self.timestamp.tzinfo and other.timestamp.tzinfo:
                 log.warning(f'{self} missing tzinfo; using tzinfo from {other} during sort')
                 self.timestamp = self.timestamp.replace(tzinfo=other.timestamp.tzinfo)

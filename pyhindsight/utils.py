@@ -10,6 +10,21 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# Seconds between the Windows/Webkit epoch (1601-01-01) and the Unix epoch.
+WEBKIT_EPOCH_OFFSET_SECONDS = 11644473600
+
+# Above this, a Webkit microsecond value is past datetime.max even after the epoch
+# offset is applied, so there is no date to convert it to and it gets clamped.
+#
+# The bound is deliberately the *Webkit-adjusted* limit rather than the raw
+# epoch-microsecond one ((253402300800 + 11644473600) * 1e6, not 253402300800 * 1e6).
+# Those two differ by exactly the epoch offset, and values in that gap are unrepresentable
+# only if the integer is read as microseconds since 1970 -- read as Webkit microseconds,
+# which is what Chrome actually writes and what the conversion below applies, they are
+# ordinary (if absurd) dates in the years 9631-9999. Using the lower bound clamped those
+# away before the Webkit branch ever saw them.
+MAX_CONVERTIBLE_WEBKIT_MICROSECONDS = 265046774400000000
+
 
 def dict_factory(cursor, row):
     d = {}
@@ -96,14 +111,23 @@ class MyEncoder(json.JSONEncoder):
             return obj.__dict__
 
 
-def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False):
+def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False,
+                none_on_failure=False):
     """Convert a variety of timestamp formats to a datetime object.
 
     If none_if_unset is True, the common Chrome "unset" sentinels -- 0 and the
     all-ones value (0xffffffffffffffff / UINT64_MAX) -- return None instead of being
     converted to 1601/1970 or datetime.max. Off by default to preserve existing behavior
     (callers and the Timeline rely on 0 -> epoch, and sorting requires a real datetime).
+
+    If none_on_failure is True, a value that cannot be converted at all returns None
+    rather than the epoch. The epoch is a real date that browsers do record, so using it
+    as the "could not parse" marker makes a genuine 1970 timestamp indistinguishable from
+    a corrupt one. Callers that opt in should keep the raw value themselves -- None says
+    only that no time could be read, not what was actually stored.
     """
+    def unconvertible():
+        return None if none_on_failure else datetime.datetime.fromtimestamp(0, datetime.UTC)
 
     try:
         if none_if_unset:
@@ -124,17 +148,18 @@ def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False):
         except Exception as e:
             if not quiet:
                 log.warning(f'Exception parsing {timestamp} to datetime: {e}')
-            return datetime.datetime.fromtimestamp(0, datetime.UTC)
+            return unconvertible()
 
         # Very big Webkit microseconds (18 digits), most often cookie expiry dates.
-        if timestamp >= 253402300800000000 and not quiet:
+        if timestamp >= MAX_CONVERTIBLE_WEBKIT_MICROSECONDS and not quiet:
             new_timestamp = datetime.datetime.max
             log.warning(f'Timestamp value {timestamp} is too large to convert; replaced with {datetime.datetime.max}')
 
         # Microsecond timestamps past 2038 can be problematic with datetime.fromtimestamp(timestamp).
         elif timestamp > 13700000000000000:
             new_timestamp = datetime.datetime.fromtimestamp(0, datetime.UTC) \
-                            + datetime.timedelta(seconds=(timestamp / 1000000) - 11644473600)
+                            + datetime.timedelta(seconds=(timestamp / 1000000)
+                                                 - WEBKIT_EPOCH_OFFSET_SECONDS)
 
         # Webkit microseconds (17 digits)
         elif timestamp > 12000000000000000:  # ts > 1981
@@ -163,7 +188,7 @@ def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False):
             except OSError as e:
                 log.warning(f'Exception parsing {timestamp} to datetime: {e}; '
                             f'common issue is value is too big for the OS to convert it')
-                return datetime.datetime.fromtimestamp(0, datetime.UTC)
+                return unconvertible()
 
         if timezone is not None:
             try:
@@ -175,7 +200,7 @@ def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False):
     except Exception as e:
         if not quiet:
             log.warning(f'Exception parsing {timestamp} to datetime: {e}')
-        return datetime.datetime.fromtimestamp(0, datetime.UTC)
+        return unconvertible()
 
 
 def decode_page_transition(raw):
