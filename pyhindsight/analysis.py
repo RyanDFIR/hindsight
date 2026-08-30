@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pyhindsight import __version__
 from pyhindsight.artifact_filter import ArtifactFilter
 from pyhindsight.browsers.chrome import Chrome
-from pyhindsight.browsers.brave import Brave
 from pyhindsight.browsers.firefox import Firefox
 from pyhindsight.browsers.webbrowser import WebBrowser, timeline_sort_key
 from pyhindsight.utils import friendly_date
@@ -782,23 +781,22 @@ class AnalysisSession(object):
             log.warning(f'Unable to read JSON file {path}; Exception: {e}')
             return None
 
-    def _resolve_pipeline(self, variant, profile_path):
+    def _resolve_pipeline(self, variant):
         """Map a variant to the parser pipeline that should process it.
 
-        Chromium variants use the Chrome parser; Firefox/Tor use the Firefox
-        parser. 'Brave' is the one ambiguous case: modern Brave is Chromium and
-        parses via Chrome (it has a SQLite ``History``), while legacy Muon-era
-        Brave stored history in ``session-store-*`` JSON and needs the dedicated
-        Brave parser. Decide by what's on disk rather than by the label.
+        Chromium variants (Chrome/Edge/Brave/Vivaldi) use the Chrome parser;
+        Firefox/Tor use the Firefox parser.
+
+        Brave used to be special-cased here: Muon-era Brave (pre-2018) stored history
+        in ``session-store-*`` JSON rather than a SQLite ``History``, and had its own
+        parser. That parser was removed -- it had been raising ``TypeError`` on
+        construction for some time, so the path was dead rather than merely unused, and
+        no such profile is detected as a profile anyway (``is_profile`` requires
+        ``History`` or ``places.sqlite``). Modern Brave is Chromium and parses via
+        Chrome like any other variant.
         """
         if variant in self.FIREFOX_VARIANTS:
             return 'firefox'
-        if variant == 'Brave':
-            try:
-                has_history = os.path.isfile(os.path.join(profile_path, 'History'))
-            except OSError:
-                has_history = False
-            return 'chrome' if has_history else 'brave_legacy'
         return 'chrome'
 
     def search_subdirs(self, base_path):
@@ -946,7 +944,7 @@ class AnalysisSession(object):
                 self.browser_type
                 or self.detected_profile_families.get(found_profile_path)
                 or "Chrome")
-            pipeline = self._resolve_pipeline(profile_browser_type, found_profile_path)
+            pipeline = self._resolve_pipeline(profile_browser_type)
             log.info(f' - Parsing profile {found_profile_path} as {profile_browser_type}')
 
             if pipeline == "chrome":
@@ -1025,27 +1023,6 @@ class AnalysisSession(object):
                 for item in browser_analysis.__dict__:
                     if isinstance(browser_analysis.__dict__[item], dict):
                         try:
-                            if browser_analysis.__dict__[item].get('presentation') and \
-                                    browser_analysis.__dict__[item].get('data'):
-                                self.promote_object_to_analysis_session(item, browser_analysis.__dict__[item])
-                        except Exception as e:
-                            log.info(f'Exception occurred while analyzing {item} for analysis session promotion: {e}')
-
-            elif pipeline == "brave_legacy":
-                browser_analysis = Brave(found_profile_path, timezone=self.timezone)
-                browser_analysis.process()
-                self.parsed_artifacts = browser_analysis.parsed_artifacts
-                self.parsed_storage.extend(browser_analysis.parsed_storage)
-                self.artifacts_counts = browser_analysis.artifacts_counts
-                self.record_artifact_status(found_profile_path, browser_analysis)
-                self.artifacts_display = browser_analysis.artifacts_display
-                self.version = browser_analysis.version
-                self.display_version = browser_analysis.display_version
-
-                for item in browser_analysis.__dict__:
-                    if isinstance(browser_analysis.__dict__[item], dict):
-                        try:
-                            # If the browser_analysis attribute has 'presentation' and 'data' subkeys, promote from
                             if browser_analysis.__dict__[item].get('presentation') and \
                                     browser_analysis.__dict__[item].get('data'):
                                 self.promote_object_to_analysis_session(item, browser_analysis.__dict__[item])
