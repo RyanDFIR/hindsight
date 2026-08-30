@@ -148,10 +148,22 @@ class Firefox(WebBrowser):
         if self.structure is None:
             self.structure = {}
 
-    def _open(self, path, database):
+    def _open(self, path, database, count_key):
+        """Open a profile database, recording a failure under `count_key`.
+
+        `count_key` must be the same `artifacts_counts` key this caller reports its
+        record count under -- not the filename, unless they happen to match. The live
+        display and the run's status summary look the artifact up by that key, so a
+        failure filed under the filename is invisible to both: the display falls back to
+        "0", which reads as "parsed fine, found nothing" rather than "could not read".
+
+        Pass `count_key=None` for a probe that is not an artifact parse (version
+        detection), so a failed probe doesn't mark an artifact as failed.
+        """
         conn = utils.open_sqlite_db(self, path, database)
         if not conn:
-            self.artifacts_counts[database] = 'Failed'
+            if count_key is not None:
+                self.artifacts_counts[count_key] = 'Failed'
             return None
         return conn
 
@@ -163,7 +175,7 @@ class Firefox(WebBrowser):
 
     def determine_version(self, path, database='places.sqlite'):
         # places.sqlite tracks schema with PRAGMA user_version; Firefox 62+ is >= 52.
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key=None)
         if not conn:
             return
         try:
@@ -206,7 +218,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'History items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key=database)
         if not conn:
             return
 
@@ -293,7 +305,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Bookmark items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key='Bookmarks')
         if not conn:
             return
 
@@ -352,7 +364,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Cookie items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key='Cookies')
         if not conn:
             return
 
@@ -366,7 +378,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query cookies: {e}')
-                self.artifacts_counts[database] = 'Failed'
+                self.artifacts_counts['Cookies'] = 'Failed'
                 return
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
@@ -427,7 +439,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Download items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key=database + '_downloads')
         if not conn:
             return
 
@@ -493,7 +505,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Form history items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key=database)
         if not conn:
             return
 
@@ -578,7 +590,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Permissions items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key='Permissions')
         if not conn:
             return
 
@@ -592,7 +604,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query permissions: {e}')
-                self.artifacts_counts[database] = 'Failed'
+                self.artifacts_counts['Permissions'] = 'Failed'
                 return
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
@@ -772,7 +784,7 @@ class Firefox(WebBrowser):
                     all_prefs[name] = value
         except OSError as e:
             log.error(f' - Could not read {full_path}: {e}')
-            self.artifacts_counts['prefs.js'] = 'Failed'
+            self.artifacts_counts['Preferences'] = 'Failed'
             return
 
         results = []
@@ -1527,7 +1539,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Favicon items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key='Favicons')
         if not conn:
             return
 
@@ -1542,7 +1554,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query favicons: {e}')
-                self.artifacts_counts[database] = 'Failed'
+                self.artifacts_counts['Favicons'] = 'Failed'
                 return
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
@@ -1609,7 +1621,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Bounce tracking items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key='Bounce Tracking')
         if not conn:
             return
 
@@ -1622,7 +1634,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query bounce-tracking state: {e}')
-                self.artifacts_counts[database] = 'Failed'
+                self.artifacts_counts['Bounce Tracking'] = 'Failed'
                 return
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
@@ -1661,7 +1673,7 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Content-blocking items from {database}:')
 
-        conn = self._open(path, database)
+        conn = self._open(path, database, count_key='Content Blocking')
         if not conn:
             return
 
@@ -1671,7 +1683,7 @@ class Firefox(WebBrowser):
                 cursor.execute("SELECT type, count, timestamp FROM events")
             except Exception as e:
                 log.error(f' - Could not query content-blocking events: {e}')
-                self.artifacts_counts[database] = 'Failed'
+                self.artifacts_counts['Content Blocking'] = 'Failed'
                 return
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)

@@ -123,5 +123,95 @@ class TestSessionStatusAggregation(unittest.TestCase):
         self.assertIsNone(session.describe_artifact_status('History'))
 
 
+class TestFailureKeysMatchCountKeys(unittest.TestCase):
+    """A parser must report a failure under the same key it reports a count under.
+
+    The live display and the run's status summary look an artifact up by its count key.
+    A failure filed under a different key (Firefox used to file several under the
+    *filename*) is invisible to both: the display falls back to "0", which reads as
+    "parsed fine, found nothing" rather than "could not read". Nothing but convention
+    keeps the two keys in step, so this checks the source directly.
+    """
+
+    BROWSER_MODULES = ('chrome', 'firefox')
+
+    # Helpers that open a database on a parser's behalf and record the failure for it.
+    # They take the key as a keyword so the caller stays responsible for naming it.
+    OPEN_HELPERS = {'_open'}
+
+    @staticmethod
+    def _count_key_source(subscript, source):
+        import ast
+        return ast.get_source_segment(source, subscript.slice)
+
+    def _mismatches(self, module_name):
+        import ast
+        import importlib
+        import inspect
+
+        module = importlib.import_module(f'pyhindsight.browsers.{module_name}')
+        source = inspect.getsource(module)
+        tree = ast.parse(source)
+
+        found = []
+        for class_node in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+            for fn in [n for n in class_node.body if isinstance(n, ast.FunctionDef)]:
+                count_keys, failure_keys = set(), set()
+                for node in ast.walk(fn):
+                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr in self.OPEN_HELPERS):
+                        for keyword in node.keywords:
+                            if keyword.arg == 'count_key':
+                                key = ast.get_source_segment(source, keyword.value)
+                                # None means "a probe, not an artifact parse".
+                                if key != 'None':
+                                    failure_keys.add(key)
+                    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                        target = node.targets[0]
+                        if (isinstance(target, ast.Subscript)
+                                and isinstance(target.value, ast.Attribute)
+                                and target.value.attr == 'artifacts_counts'):
+                            key = self._count_key_source(target, source)
+                            is_status = (isinstance(node.value, ast.Constant)
+                                         and isinstance(node.value.value, str))
+                            (failure_keys if is_status else count_keys).add(key)
+
+                # Only meaningful for parsers that report a count at all.
+                if not count_keys:
+                    continue
+                stray = failure_keys - count_keys
+                if stray:
+                    found.append(f'{module_name}.{fn.name}: '
+                                 f'counts under {sorted(count_keys)}, '
+                                 f'fails under {sorted(stray)}')
+        return found
+
+    def test_no_parser_files_a_failure_under_a_key_it_never_counts(self):
+        mismatches = []
+        for module_name in self.BROWSER_MODULES:
+            mismatches.extend(self._mismatches(module_name))
+        self.assertEqual([], mismatches, '\n' + '\n'.join(mismatches))
+
+    def test_the_check_would_catch_a_regression(self):
+        # Guard against the audit silently passing because it stopped finding anything.
+        import ast
+        source = (
+            'class P:\n'
+            '    def get_thing(self, database):\n'
+            "        self.artifacts_counts[database] = 'Failed'\n"
+            "        self.artifacts_counts['Thing'] = 5\n")
+        tree = ast.parse(source)
+        fn = tree.body[0].body[0]
+        count_keys, failure_keys = set(), set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign):
+                target = node.targets[0]
+                key = ast.get_source_segment(source, target.slice)
+                is_status = isinstance(node.value.value, str) if isinstance(
+                    node.value, ast.Constant) else False
+                (failure_keys if is_status else count_keys).add(key)
+        self.assertEqual({'database'}, failure_keys - count_keys)
+
+
 if __name__ == '__main__':
     unittest.main()
