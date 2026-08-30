@@ -144,3 +144,6 @@ class Brave(Chrome):
         self.cached_key = None
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
+
+        # Split parse failures out of the record counts.
+        self.finalize_artifact_status()

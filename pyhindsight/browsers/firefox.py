@@ -130,10 +130,10 @@ INTERESTING_PREFS = [
 
 class Firefox(WebBrowser):
     def __init__(self, profile_path, browser_name=None, cache_path=None, version=None, timezone=None,
-                 no_copy=None, temp_dir=None):
+                 no_copy=None, temp_dir=None, artifact_filter=None):
         WebBrowser.__init__(
             self, profile_path, browser_name=browser_name, cache_path=cache_path, version=version,
-            timezone=timezone, no_copy=no_copy, temp_dir=temp_dir)
+            timezone=timezone, no_copy=no_copy, temp_dir=temp_dir, artifact_filter=artifact_filter)
         self.profile_path = profile_path
         # Honor a variant passed by the caller (e.g. "Tor"); Tor Browser is
         # Firefox-based and currently shares this parser, differing only in variant.
@@ -2955,41 +2955,48 @@ class Firefox(WebBrowser):
                 driver.run(
                     'URL records', 'places.sqlite', self.get_history,
                     self.profile_path, 'places.sqlite',
-                    display_key='places.sqlite', display_value='URL records')
+                    display_key='places.sqlite', display_value='URL records',
+                    artifact='history')
 
                 driver.run(
                     'Download records', 'places.sqlite_downloads', self.get_downloads,
                     self.profile_path, 'places.sqlite',
-                    display_key='places.sqlite_downloads', display_value='Download records')
+                    display_key='places.sqlite_downloads', display_value='Download records',
+                    artifact='downloads')
 
                 driver.run(
                     'Bookmark records', 'Bookmarks', self.get_bookmarks,
                     self.profile_path, 'places.sqlite',
-                    display_key='Bookmarks', display_value='Bookmark records')
+                    display_key='Bookmarks', display_value='Bookmark records',
+                    artifact='bookmarks')
 
             if 'formhistory.sqlite' in input_listing:
                 driver.run(
                     'Form history records', 'formhistory.sqlite', self.get_form_history,
                     self.profile_path, 'formhistory.sqlite',
-                    display_key='formhistory.sqlite', display_value='Form history records')
+                    display_key='formhistory.sqlite', display_value='Form history records',
+                    artifact='autofill')
 
             if 'sessionstore.jsonlz4' in input_listing or 'sessionstore-backups' in input_listing:
                 driver.run(
                     'Session (tab) records', 'Sessions', self.get_sessionstore,
                     self.profile_path,
-                    display_key='Sessions', display_value='Session (tab) records')
+                    display_key='Sessions', display_value='Session (tab) records',
+                    artifact='sessions')
 
             if 'bookmarkbackups' in input_listing:
                 driver.run(
                     'Bookmark backup records', 'Bookmark Backups', self.get_bookmark_backups,
                     self.profile_path,
-                    display_key='Bookmark Backups', display_value='Bookmark backup records')
+                    display_key='Bookmark Backups', display_value='Bookmark backup records',
+                    artifact='bookmark-backups')
 
             if 'favicons.sqlite' in input_listing:
                 driver.run(
                     'Favicon-derived URL records', 'Favicons', self.get_favicons,
                     self.profile_path, 'favicons.sqlite',
-                    display_key='Favicons', display_value='Favicon-derived URL records')
+                    display_key='Favicons', display_value='Favicon-derived URL records',
+                    artifact='favicons')
 
             # Website Storage
             driver.group("Website Storage")
@@ -2997,31 +3004,36 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Cookie records', 'Cookies', self.get_cookies,
                     self.profile_path, 'cookies.sqlite',
-                    display_key='Cookies', display_value='Cookie records')
+                    display_key='Cookies', display_value='Cookie records',
+                    artifact='cookies')
 
             if 'storage' in input_listing and os.path.isdir(
                     os.path.join(self.profile_path, 'storage', 'default')):
                 driver.run(
                     'Local Storage records', 'Local Storage', self.get_local_storage,
                     self.profile_path,
-                    display_key='Local Storage', display_value='Local Storage records')
+                    display_key='Local Storage', display_value='Local Storage records',
+                    artifact='local-storage')
 
                 driver.run(
                     'IndexedDB records', 'IndexedDB', self.get_indexeddb,
                     self.profile_path,
-                    display_key='IndexedDB', display_value='IndexedDB records')
+                    display_key='IndexedDB', display_value='IndexedDB records',
+                    artifact='indexeddb')
 
                 driver.run(
                     'Cache API records', 'Cache API', self.get_cache_storage,
                     self.profile_path,
-                    display_key='Cache API', display_value='Cache API records')
+                    display_key='Cache API', display_value='Cache API records',
+                    artifact='cache-api')
 
             cache_dir = self._resolve_cache_dir()
             if cache_dir:
                 driver.run(
                     'Cache records', 'Cache', self.get_cache,
                     cache_dir,
-                    display_key='Cache', display_value='Cache records')
+                    display_key='Cache', display_value='Cache records',
+                    artifact='cache')
             else:
                 log.info('No Firefox cache2 directory found; skipping cache parse.')
 
@@ -3031,7 +3043,8 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Installed Extensions', 'Extensions', self.get_extensions,
                     self.profile_path, 'extensions.json',
-                    display_key='Extensions', display_value='Installed Extensions')
+                    display_key='Extensions', display_value='Installed Extensions',
+                    artifact='extensions')
 
             # Configuration & Supporting Data
             driver.group("Configuration & Supporting Data")
@@ -3039,39 +3052,49 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Preference items', 'Preferences', self.get_preferences,
                     self.profile_path, 'prefs.js',
-                    display_key='Preferences', display_value='Preference items')
+                    display_key='Preferences', display_value='Preference items',
+                    artifact='preferences')
 
             if 'permissions.sqlite' in input_listing:
                 driver.run(
                     'Permission records', 'Permissions', self.get_permissions,
                     self.profile_path, 'permissions.sqlite',
-                    display_key='Permissions', display_value='Permission records')
+                    display_key='Permissions', display_value='Permission records',
+                    artifact='permissions')
 
             if 'SiteSecurityServiceState.bin' in input_listing:
                 driver.run(
                     'HSTS records', 'HSTS', self.get_hsts,
                     self.profile_path, 'SiteSecurityServiceState.bin',
-                    display_key='HSTS', display_value='HSTS records')
+                    display_key='HSTS', display_value='HSTS records',
+                    artifact='hsts')
 
             if 'logins.json' in input_listing:
                 driver.run(
                     'Saved login records', 'Logins', self.get_logins,
                     self.profile_path, 'logins.json',
-                    display_key='Logins', display_value='Saved login records')
+                    display_key='Logins', display_value='Saved login records',
+                    artifact='logins')
 
             if 'bounce-tracking-protection.sqlite' in input_listing:
                 driver.run(
                     'Bounce-tracking records', 'Bounce Tracking', self.get_bounce_tracking,
                     self.profile_path, 'bounce-tracking-protection.sqlite',
-                    display_key='Bounce Tracking', display_value='Bounce-tracking records')
+                    display_key='Bounce Tracking', display_value='Bounce-tracking records',
+                    artifact='bounce-tracking')
 
             if 'protections.sqlite' in input_listing:
                 driver.run(
                     'Content-blocking event records', 'Content Blocking', self.get_content_blocking,
                     self.profile_path, 'protections.sqlite',
-                    display_key='Content Blocking', display_value='Content-blocking event records')
+                    display_key='Content Blocking', display_value='Content-blocking event records',
+                    artifact='content-blocking')
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
+
+        # Split parse failures out of the record counts now that the live display has
+        # finished reading them.
+        self.finalize_artifact_status()
 
     class URLItem(WebBrowser.URLItem):
         pass

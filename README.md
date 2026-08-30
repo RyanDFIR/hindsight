@@ -44,6 +44,41 @@ Command Line Options:
 | -l or --log	 | Location Hindsight should log to (will append if exists) |
 | -h or --help   | Shows these options and the default Chrome data locations |
 | -t or --timezone | Display timezone for the timestamps in XLSX output |
+| --only or --artifacts | Only parse these artifacts (comma-separated; repeatable) |
+| --skip or --exclude | Parse everything except these artifacts (comma-separated; repeatable) |
+| --list-artifacts | Print the artifact names accepted by `--only` and `--skip`, then exit |
+
+## Selecting Which Artifacts to Parse
+
+By default, Hindsight parses every artifact it finds. `--only` and `--skip` narrow that
+down, which is useful for quick triage and for skipping the cache when it is large and
+not relevant to the question at hand.
+
+```
+hindsight.py -i <profile> --only history,downloads
+hindsight.py -i <profile> --skip cache
+hindsight.py -i <profile> --only user-activity --skip sessions
+```
+
+Artifact names are browser-neutral: `history` selects Chrome's `History` URL records and
+Firefox's `places.sqlite` URL records, so the same command works on either. Names are
+case-insensitive, and spaces, underscores, and hyphens are interchangeable
+(`local-storage`, `local_storage`, and `"Local Storage"` are the same name).
+
+Group names can be used anywhere an artifact name can, and select everything under them:
+`user-activity`, `website-storage`, `browser-extensions`, `configuration`, plus `caches`
+(every cache artifact) and `all`. `--only` and `--skip` can be combined, with `--skip`
+further narrowing `--only`.
+
+Run `hindsight.py --list-artifacts` for the full list with descriptions and aliases.
+
+An artifact excluded by a filter is reported as `[ skipped ]` during the run and noted in
+the log, so a report that omits an artifact stays distinguishable from a profile that
+never had it. An unrecognized name is an error rather than being ignored, so a typo can't
+quietly produce a report covering the wrong artifacts.
+
+Note that version detection still reads the profile's database schemas, so filtering does
+not change the detected browser version.
 
 ## Default Profile Paths
 
