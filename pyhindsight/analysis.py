@@ -12,6 +12,7 @@ import xlsxwriter.worksheet
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pyhindsight import __version__
+from pyhindsight.artifact_filter import ArtifactFilter
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.browsers.brave import Brave
 from pyhindsight.browsers.firefox import Firefox
@@ -472,7 +473,7 @@ class AnalysisSession(object):
             timezone=None, available_output_formats=None, selected_output_format=None, available_decrypts=None,
             selected_decrypts=None, parsed_artifacts=None, artifacts_display=None, artifacts_counts=None,
             parsed_storage=None, parsed_sync_data=None, plugin_descriptions=None, selected_plugins=None, plugin_results=None,
-            hindsight_version=None, preferences=None, originator_guids=None):
+            hindsight_version=None, preferences=None, originator_guids=None, artifact_filter=None):
         self.input_path = input_path
         self.profile_paths = profile_paths
         self.cache_path = cache_path
@@ -492,6 +493,15 @@ class AnalysisSession(object):
         self.parsed_artifacts = parsed_artifacts
         self.artifacts_display = artifacts_display
         self.artifacts_counts = artifacts_counts
+        # {profile_path: {count_key: status}} for artifacts that produced an outcome
+        # rather than a count (a failed or skipped parse). Kept separate from
+        # artifacts_counts so a count is always a count.
+        self.artifacts_status = {}
+        # Which artifacts this run is allowed to parse. A permissive filter by default,
+        # so nothing changes for callers that don't set one. The same object is shared
+        # by every profile's browser object, so its record of what was skipped covers
+        # the whole run.
+        self.artifact_filter = artifact_filter or ArtifactFilter()
         self.parsed_storage = parsed_storage
         self.parsed_extension_data = []
         self.parsed_sync_data = parsed_sync_data
@@ -603,28 +613,70 @@ class AnalysisSession(object):
 
     @staticmethod
     def sum_dict_counts(dict1, dict2):
-        """Combine two dicts by summing the values of shared keys"""
+        """Combine two dicts of record counts by summing the values of shared keys.
+
+        Both dicts hold counts only. Non-count outcomes (a failed or skipped parse) live
+        in `artifacts_status` and are removed from the counts by
+        `WebBrowser.finalize_artifact_status()` before aggregation, so there is nothing
+        to special-case here.
+
+        This used to accept a ``'Failed'`` sentinel and resolve it by substituting ``0``,
+        which reported a failed parse as "found nothing" -- and, when another profile had
+        parsed the same artifact, dropped the failure entirely. A non-numeric value now
+        means a caller bypassed finalization, which is a bug worth surfacing rather than
+        papering over with a zero.
+        """
         for key, value in list(dict2.items()):
-            # Case 1: dict2's value for key is a string (aka: it failed)
             if isinstance(value, str):
-                #  The value should only be non-int if it's a Failed message
-                if not value.startswith('Fail'):
-                    raise ValueError('Unexpected status value')
-
-                dict1[key] = dict1.setdefault(key, 0)
-
-            # Case 2: dict1's value of key is a string (aka: it failed)
-            elif isinstance(dict1.get(key), str):
-                #  The value should only be non-int if it's a Failed message
-                if not dict1.get(key).startswith('Fail'):
-                    raise ValueError('Unexpected status value')
-
-                dict1[key] = value
-
-            # Case 3: dict2's value for key is an int, or doesn't exist.
-            else:
-                dict1[key] = dict1.setdefault(key, 0) + value
+                raise TypeError(
+                    f"artifacts_counts['{key}'] is the string {value!r}; counts must be "
+                    f"numeric. Status values belong in artifacts_status -- call "
+                    f"finalize_artifact_status() on the browser before aggregating.")
+            dict1[key] = dict1.setdefault(key, 0) + value
         return dict1
+
+    def record_artifact_status(self, profile_path, browser_analysis):
+        """Record one profile's non-count artifact outcomes (failed / skipped).
+
+        Kept per profile: summing counts across profiles is fine, but "the Cookies DB
+        failed" is only meaningful attached to the profile it failed in.
+        """
+        statuses = getattr(browser_analysis, 'artifacts_status', None)
+        if statuses:
+            self.artifacts_status.setdefault(profile_path, {}).update(statuses)
+            for count_key, status in sorted(statuses.items()):
+                log.info(f' - {count_key}: {status} ({profile_path})')
+
+    def artifact_status_summary(self):
+        """Flatten per-profile statuses to {count_key: {status: [profile, ...]}}.
+
+        For output that presents one combined view of a multi-profile run. Per-profile
+        detail stays in `self.artifacts_status`; this only makes the combined view able
+        to say "failed", and in how many profiles, instead of showing a bare count.
+        """
+        summary = {}
+        for profile_path, statuses in self.artifacts_status.items():
+            for count_key, status in statuses.items():
+                summary.setdefault(count_key, {}).setdefault(status, []).append(profile_path)
+        return summary
+
+    def describe_artifact_status(self, count_key):
+        """One-line status for `count_key` across the run, or None if it has none.
+
+        Names the profile count when only some profiles were affected, because a
+        partial failure reads very differently from a total one.
+        """
+        statuses = self.artifact_status_summary().get(count_key)
+        if not statuses:
+            return None
+        total_profiles = len(self.profile_paths or []) or 1
+        parts = []
+        for status, profiles in sorted(statuses.items()):
+            if total_profiles > 1:
+                parts.append(f'{status} in {len(profiles)} of {total_profiles} profiles')
+            else:
+                parts.append(status)
+        return '; '.join(parts)
 
     def promote_object_to_analysis_session(self, item_name, item_value):
         if self.__dict__.get(item_name):
@@ -863,6 +915,8 @@ class AnalysisSession(object):
 
         # Analysis start time
         log.info("Starting analysis")
+        if self.artifact_filter.is_active:
+            log.info(f'Artifact selection in effect -- {self.artifact_filter.describe()}')
 
         log.info(f'Reading files from {self.input_path}')
         try:
@@ -900,13 +954,15 @@ class AnalysisSession(object):
                                           available_decrypts=self.available_decrypts,
                                           cache_path=self.cache_path, timezone=self.timezone,
                                           no_copy=self.no_copy, temp_dir=self.temp_dir,
-                                          originator_guids=self.originator_guids)
+                                          originator_guids=self.originator_guids,
+                                          artifact_filter=self.artifact_filter)
                 browser_analysis.process(api_keys=self.api_keys)
                 self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.parsed_extension_data.extend(browser_analysis.parsed_extension_data)
                 self.parsed_sync_data.extend(browser_analysis.parsed_sync_data)
                 self.artifacts_counts = self.sum_dict_counts(self.artifacts_counts, browser_analysis.artifacts_counts)
+                self.record_artifact_status(found_profile_path, browser_analysis)
                 if self.artifacts_display is None:
                     self.artifacts_display = {}
                 self.artifacts_display.update(browser_analysis.artifacts_display)
@@ -945,11 +1001,13 @@ class AnalysisSession(object):
                 browser_analysis = Firefox(found_profile_path, browser_name=profile_browser_type,
                                            cache_path=self.cache_path,
                                            timezone=self.timezone,
-                                           no_copy=self.no_copy, temp_dir=self.temp_dir)
+                                           no_copy=self.no_copy, temp_dir=self.temp_dir,
+                                           artifact_filter=self.artifact_filter)
                 browser_analysis.process()
                 self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.artifacts_counts = self.sum_dict_counts(self.artifacts_counts, browser_analysis.artifacts_counts)
+                self.record_artifact_status(found_profile_path, browser_analysis)
                 if self.artifacts_display is None:
                     self.artifacts_display = {}
                 self.artifacts_display.update(browser_analysis.artifacts_display)
@@ -979,6 +1037,7 @@ class AnalysisSession(object):
                 self.parsed_artifacts = browser_analysis.parsed_artifacts
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.artifacts_counts = browser_analysis.artifacts_counts
+                self.record_artifact_status(found_profile_path, browser_analysis)
                 self.artifacts_display = browser_analysis.artifacts_display
                 self.version = browser_analysis.version
                 self.display_version = browser_analysis.display_version

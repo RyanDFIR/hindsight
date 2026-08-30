@@ -20,6 +20,7 @@ import time
 import pyhindsight
 import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
+from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
 from pyhindsight.utils import get_rich_banner
 
 import rich.align
@@ -94,12 +95,35 @@ The Chrome Profile folder default locations are:
                         help='Path to the cache directory; only needed if the directory is outside the given "input" '
                              'directory. Mac systems are set up this way by default. On a Mac, the default cache '
                              'directory location for Chrome is <userdir>/Library/Caches/Google/Chrome/Default/Cache/')
+    parser.add_argument('--only', '--artifacts', action='append', metavar='ARTIFACTS',
+                        help='Only parse these artifacts (comma-separated; repeatable). Accepts artifact '
+                             'names and group names, for example "--only history,downloads" or '
+                             '"--only user-activity". Use --list-artifacts to see every name.')
+    parser.add_argument('--skip', '--exclude', action='append', metavar='ARTIFACTS',
+                        help='Parse everything except these artifacts (comma-separated; repeatable), for '
+                             'example "--skip cache". Can be combined with --only, which it further narrows.')
+    parser.add_argument('--list-artifacts', '--list_artifacts', action='store_true',
+                        help='Print the artifact names accepted by --only and --skip, then exit.')
     parser.add_argument('--nocopy', '--no_copy', help='Don\'t copy files before opening them; this might run faster, '
                                                       'but some locked files may be inaccessible', action='store_true')
     parser.add_argument('--temp_dir', default=os.path.join(get_base_dir(), 'hindsight-temp'),
                         help='If files are copied before being opened, use this directory as the copy destination')
 
+    # --list-artifacts is informational and shouldn't require -i, so handle it before
+    # argparse enforces the required arguments.
+    if '--list-artifacts' in sys.argv or '--list_artifacts' in sys.argv:
+        print(format_catalog())
+        sys.exit(0)
+
     args = parser.parse_args()
+
+    # Resolve --only/--skip into the filter the run will consult. An unrecognized name
+    # is fatal rather than ignored: silently dropping a mistyped '--only' term would
+    # produce a confident-looking report covering the wrong artifacts.
+    try:
+        args.artifact_filter = ArtifactFilter.from_selectors(args.only, args.skip)
+    except UnknownArtifactError as e:
+        parser.error(str(e))
 
     # Convert any relative paths to absolute using base directory
     base_dir = get_base_dir()
@@ -194,6 +218,7 @@ def main():
         analysis_session.cache_path = args.cache
 
     analysis_session.selected_output_format = args.format
+    analysis_session.artifact_filter = args.artifact_filter
     analysis_session.browser_type = args.browser_type
     analysis_session.timezone = args.timezone
     analysis_session.no_copy = args.nocopy
@@ -229,6 +254,8 @@ def main():
     meta_table.add_row("Start time", start_time)
     meta_table.add_row("Input directory", args.input)
     meta_table.add_row("Profiles found", str(profile_count))
+    if analysis_session.artifact_filter.is_active:
+        meta_table.add_row("Artifacts", analysis_session.artifact_filter.describe())
     if args.browser_type:
         meta_table.add_row("Browser type", f"{args.browser_type} (forced via -b)")
     else:

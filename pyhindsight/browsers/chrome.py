@@ -39,14 +39,26 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
+# Chrome's secondary cache directories, as (directory, row_type, artifact selector).
+# The three Dawn caches share one 'dawn-cache' selector: they are the same class of GPU
+# artifact and are wanted (or unwanted) together. Module level so the selectors can be
+# checked against the artifact catalog by tests.
+SECONDARY_CACHE_DIRS = [
+    ('GPUCache', 'gpu', 'gpu-cache'),
+    ('Media Cache', 'media', 'media-cache'),
+    ('DawnCache', 'dawn', 'dawn-cache'),
+    ('DawnWebGPUCache', 'dawn webgpu', 'dawn-cache'),
+    ('DawnGraphiteCache', 'dawn graphite', 'dawn-cache'),
+]
+
 
 class Chrome(WebBrowser):
     def __init__(self, profile_path, browser_name=None, cache_path=None, version=None, timezone=None,
                  storage=None, available_decrypts=None, no_copy=None, temp_dir=None,
-                 originator_guids=None):
+                 originator_guids=None, artifact_filter=None):
         WebBrowser.__init__(
             self, profile_path, browser_name=browser_name, cache_path=cache_path, version=version, timezone=timezone,
-            no_copy=no_copy, temp_dir=temp_dir)
+            no_copy=no_copy, temp_dir=temp_dir, artifact_filter=artifact_filter)
         self.profile_path = profile_path
         # Honor a variant passed by the caller (e.g. "Edge", "Brave", "Vivaldi");
         # all Chromium variants currently share this parser and differ only in variant.
@@ -4789,61 +4801,71 @@ class Chrome(WebBrowser):
                 driver.run(
                     'URL', 'History', self.get_history,
                     self.profile_path, 'History', self.version, 'url',
-                    display_key='History', display_value=f'URL records')
+                    display_key='History', display_value=f'URL records',
+                    artifact='history')
 
                 driver.run(
                     'Download', 'History_downloads', self.get_downloads,
                     self.profile_path, 'History', self.version, 'download',
-                    display_key='History_downloads', display_value=f'Download records')
+                    display_key='History_downloads', display_value=f'Download records',
+                    artifact='downloads')
 
             if 'shared_proto_db' in input_listing:
                 driver.run(
                     'Downloads (shared_proto_db)', 'shared_proto_db downloads',
                     self.get_shared_proto_db_downloads, self.profile_path, 'shared_proto_db',
                     display_key='shared_proto_db downloads',
-                    display_value='shared_proto_db download records')
+                    display_value='shared_proto_db download records',
+                    artifact='downloads')
 
             if 'Archived History' in input_listing:
                 driver.run(
                     'Archived History', 'Archived History', self.get_history,
                     self.profile_path, 'Archived History', self.version, 'url (archived)',
-                    display_key='Archived History', display_value='Archived URL records')
+                    display_key='Archived History', display_value='Archived URL records',
+                    artifact='archived-history')
 
             if 'Media History' in input_listing:
                 driver.run(
                     'Media History', 'Media History', self.get_media_history,
                     self.profile_path, 'Media History', self.version, 'media (playback end)',
-                    display_key='Media History', display_value='Media History records')
+                    display_key='Media History', display_value='Media History records',
+                    artifact='media-history')
 
             if 'Web Data' in input_listing:
                 driver.run(
                     'Autofill', 'Autofill', self.get_autofill,
                     self.profile_path, 'Web Data', self.version,
-                    display_key='Autofill', display_value='Autofill records')
+                    display_key='Autofill', display_value='Autofill records',
+                    artifact='autofill')
 
             if 'Login Data' in input_listing:
                 driver.run(
                     'Login Data', 'Login Data', self.get_login_data,
                     self.profile_path, 'Login Data', self.version,
-                    display_key='Login Data', display_value='Login Data records')
+                    display_key='Login Data', display_value='Login Data records',
+                    artifact='logins')
 
             if 'Login Data For Account' in input_listing:
                 driver.run(
                     'Login Data', 'Login Data', self.get_login_data,
                     self.profile_path, 'Login Data For Account', self.version,
-                    display_key='Login Data', display_value='Login Data (Account) records')
+                    display_key='Login Data', display_value='Login Data (Account) records',
+                    artifact='logins')
 
             if 'Bookmarks' in input_listing:
                 driver.run(
                     'Bookmarks', 'Bookmarks', self.get_bookmarks,
                     self.profile_path, 'Bookmarks', self.version,
-                    display_key='Bookmarks', display_value='Bookmark records')
+                    display_key='Bookmarks', display_value='Bookmark records',
+                    artifact='bookmarks')
 
             if 'Sessions' in input_listing:
                 driver.run(
                     'Sessions', 'Sessions', self.get_sessions,
                     self.profile_path, 'Sessions',
-                    display_key='Sessions', display_value='Session (SNSS) records')
+                    display_key='Sessions', display_value='Session (SNSS) records',
+                    artifact='sessions')
 
             # Website Storage
             driver.group("Website Storage")
@@ -4851,77 +4873,87 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Network Cookies', 'Cookies', self.get_cookies,
                     os.path.join(self.profile_path, 'Network'), 'Cookies', self.version,
-                    display_key='Cookies', display_value='Cookie records')
+                    display_key='Cookies', display_value='Cookie records',
+                    artifact='cookies')
 
             elif 'Cookies' in input_listing:
                 driver.run(
                     'Cookies', 'Cookies', self.get_cookies,
                     self.profile_path, 'Cookies', self.version,
-                    display_key='Cookies', display_value='Cookie records')
+                    display_key='Cookies', display_value='Cookie records',
+                    artifact='cookies')
 
             if self.cache_path is not None and self.cache_path != '':
                 c_path, c_dir = os.path.split(self.cache_path)
                 driver.run(
                     'Cache', 'Cache', self.get_cache,
                     c_path, c_dir, row_type='cache',
-                    display_key='Cache', display_value='Cache records')
+                    display_key='Cache', display_value='Cache records',
+                    artifact='cache')
 
             elif 'Cache' in input_listing:
                 if os.path.isdir(os.path.join(self.profile_path, 'Cache', 'Cache_Data')):
                     driver.run(
                         'Cache', 'Cache', self.get_cache,
                         os.path.join(self.profile_path, 'Cache'), 'Cache_Data', row_type='cache',
-                        display_key='Cache', display_value='Cache records')
+                        display_key='Cache', display_value='Cache records',
+                        artifact='cache')
                 else:
                     driver.run(
                         'Cache', 'Cache', self.get_cache,
                         self.profile_path, 'Cache', row_type='cache',
-                        display_key='Cache', display_value='Cache records')
+                        display_key='Cache', display_value='Cache records',
+                        artifact='cache')
                 
-            for cache_dir, cache_type in [('GPUCache', 'gpu'), ('Media Cache', 'media'),
-                                            ('DawnCache', 'dawn'), ('DawnWebGPUCache', 'dawn webgpu'),
-                                            ('DawnGraphiteCache', 'dawn graphite')]:
+            for cache_dir, cache_type, cache_artifact in SECONDARY_CACHE_DIRS:
                 if cache_dir in input_listing:
                     driver.run(
                         cache_dir, cache_dir, self.get_cache,
                         self.profile_path, cache_dir, row_type=f'cache ({cache_type})',
-                        display_key=cache_dir, display_value=f'{cache_dir} records')
+                        display_key=cache_dir, display_value=f'{cache_dir} records',
+                        artifact=cache_artifact)
 
             if 'Local Storage' in input_listing:
                 driver.run(
                     'Local Storage', 'Local Storage', self.get_local_storage,
                     self.profile_path, 'Local Storage',
-                    display_key='Local Storage', display_value='Local Storage records')
+                    display_key='Local Storage', display_value='Local Storage records',
+                    artifact='local-storage')
 
             if 'Session Storage' in input_listing:
                 driver.run(
                     'Session Storage', 'Session Storage', self.get_session_storage,
                     self.profile_path, 'Session Storage',
-                    display_key='Session Storage', display_value='Session Storage records')
+                    display_key='Session Storage', display_value='Session Storage records',
+                    artifact='session-storage')
 
             if 'IndexedDB' in input_listing:
                 driver.run(
                     'IndexedDB', 'IndexedDB', self.get_indexeddb,
                     self.profile_path, 'IndexedDB',
-                    display_key='IndexedDB', display_value='IndexedDB records')
+                    display_key='IndexedDB', display_value='IndexedDB records',
+                    artifact='indexeddb')
 
             if 'File System' in input_listing:
                 driver.run(
                     'File System', 'File System', self.get_file_system,
                     self.profile_path, 'File System',
-                    display_key='File System', display_value='File System items')
+                    display_key='File System', display_value='File System items',
+                    artifact='file-system')
 
             if 'Platform Notifications' in input_listing:
                 driver.run(
                     'Platform Notifications', 'Platform Notifications', self.get_platform_notifications,
                     self.profile_path, 'Platform Notifications',
-                    display_key='Platform Notifications', display_value='Platform Notification records')
+                    display_key='Platform Notifications', display_value='Platform Notification records',
+                    artifact='notifications')
 
             if 'Service Worker' in input_listing:
                 driver.run(
                     'Service Workers', 'Service Workers', self.get_service_workers,
                     self.profile_path, 'Service Worker',
-                    display_key='Service Workers', display_value='Service Worker registrations')
+                    display_key='Service Workers', display_value='Service Worker registrations',
+                    artifact='service-workers')
 
             # Browser Extensions
             driver.group("Browser Extensions")
@@ -4930,13 +4962,15 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Extensions', 'Extensions', self.get_extensions,
                     self.profile_path, 'Extensions',
-                    display_key='Extensions', display_value='Installed Extensions')
+                    display_key='Extensions', display_value='Installed Extensions',
+                    artifact='extensions')
 
             if 'Secure Preferences' in input_listing:
                 driver.run(
                     'Extension Settings', 'Secure Preferences', self.get_extension_settings,
                     self.profile_path, 'Secure Preferences',
-                    display_key='Extension Settings', display_value='Extension settings entries')
+                    display_key='Extension Settings', display_value='Extension settings entries',
+                    artifact='extension-settings')
 
             if 'Extension Cookies' in input_listing:
                 # Workaround to cap the version at 65 for Extension Cookies, as until that
@@ -4950,20 +4984,23 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Extension Cookies', 'Extension Cookies', self.get_cookies,
                     self.profile_path, 'Extension Cookies', ext_cookies_version,
-                    display_key='Extension Cookies', display_value='Extension Cookie records')
+                    display_key='Extension Cookies', display_value='Extension Cookie records',
+                    artifact='extension-cookies')
 
             for directory in ['Extension Rules', 'Extension Scripts', 'Extension State']:
                 if directory in input_listing:
                     driver.run(
                         directory, directory, self.get_unified_extension_data,
                         self.profile_path, directory,
-                        display_key=f'{directory}', display_value=f'{directory} records')
+                        display_key=f'{directory}', display_value=f'{directory} records',
+                        artifact='extension-storage')
 
             if 'DNR Extension Rules' in input_listing:
                 driver.run(
                     'DNR Extension Rules', 'DNR Extension Rules', self.get_dnr_extension_rules,
                     self.profile_path, 'DNR Extension Rules',
-                    display_key='DNR Extension Rules', display_value='DNR Extension Rules records')
+                    display_key='DNR Extension Rules', display_value='DNR Extension Rules records',
+                    artifact='dnr-rules')
 
             for directory in ['Local App Settings', 'Local Extension Settings',
                               'Managed Extension Settings', 'Sync App Settings', 'Sync Extension Settings']:
@@ -4971,7 +5008,8 @@ class Chrome(WebBrowser):
                     driver.run(
                         directory, directory, self.get_partitioned_extension_data,
                         self.profile_path, directory,
-                        display_key=f'{directory}', display_value=f'{directory} records')
+                        display_key=f'{directory}', display_value=f'{directory} records',
+                        artifact='extension-storage')
 
             # Configuration & Supporting Data
             driver.group("Configuration & Supporting Data")
@@ -4980,42 +5018,49 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Preferences', 'Preferences', self.get_preferences,
                     self.profile_path, 'Preferences',
-                    display_key='Preferences', display_value='Preference items')
+                    display_key='Preferences', display_value='Preference items',
+                    artifact='preferences')
 
             if 'Site Characteristics Database' in input_listing:
                 driver.run(
                     'Site Characteristics', 'Site Characteristics', self.get_site_characteristics,
                     self.profile_path, 'Site Characteristics Database',
-                    display_key='Site Characteristics', display_value='Site Characteristics records')
+                    display_key='Site Characteristics', display_value='Site Characteristics records',
+                    artifact='site-characteristics')
 
             if 'Sync Data' in input_listing:
                 driver.run(
                     'Sync Data', 'Sync Data', self.get_sync_data,
                     self.profile_path, 'Sync Data',
-                    display_key='Sync Data', display_value='Sync Data records')
+                    display_key='Sync Data', display_value='Sync Data records',
+                    artifact='sync-data')
 
             if network_listing and 'TransportSecurity' in network_listing:
                 driver.run(
                     'Network HSTS', 'HSTS', self.get_transport_security,
                     os.path.join(self.profile_path, 'Network'), 'TransportSecurity',
-                    display_key='HSTS', display_value='HSTS records')
+                    display_key='HSTS', display_value='HSTS records',
+                    artifact='hsts')
 
             elif 'TransportSecurity' in input_listing:
                 driver.run(
                     'HSTS', 'HSTS', self.get_transport_security,
                     self.profile_path, 'TransportSecurity',
-                    display_key='HSTS', display_value='HSTS records')
+                    display_key='HSTS', display_value='HSTS records',
+                    artifact='hsts')
 
             if 'DIPS' in input_listing:
                 driver.run(
                     'DIPS Popups', 'DIPS Popups', self.get_dips_popups,
                     self.profile_path, 'DIPS', self.version,
-                    display_key='DIPS Popups', display_value='DIPS Popup records')
+                    display_key='DIPS Popups', display_value='DIPS Popup records',
+                    artifact='dips')
 
                 driver.run(
                     'DIPS', 'DIPS', self.get_dips,
                     self.profile_path, 'DIPS', self.version,
-                    display_key='DIPS', display_value='DIPS records')
+                    display_key='DIPS', display_value='DIPS records',
+                    artifact='dips')
 
         # Destroy the cached key so that JSON serialization doesn't
         # have a cardiac arrest on the non-unicode binary data.
@@ -5048,6 +5093,10 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
         self.parsed_storage.sort()
+
+        # Split parse failures out of the record counts now that the live display has
+        # finished reading them.
+        self.finalize_artifact_status()
 
         # Clean temp directory after processing profile
         if not self.no_copy:

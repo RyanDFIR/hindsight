@@ -14,8 +14,15 @@ import rich.spinner
 import rich.table
 import rich.text
 from pyhindsight import utils
+from pyhindsight.artifact_filter import ArtifactFilter
 
 log = logging.getLogger(__name__)
+
+# Per-artifact outcomes that are not record counts. These live in `artifacts_status`
+# rather than `artifacts_counts` so that a count is always a count: "couldn't read this"
+# and "read it, found nothing" have to stay distinguishable in output.
+ARTIFACT_STATUS_FAILED = 'failed'
+ARTIFACT_STATUS_SKIPPED = 'skipped'
 
 # Sorts before any real timestamp; only ever used to order un-timestamped items among
 # themselves, never rendered.
@@ -80,10 +87,33 @@ class ProcessingDisplay:
         """Set the group subsequent run() calls are bucketed under."""
         self.current_group = name
 
-    def run(self, label, count_key, func, *args, display_key=None, display_value=None, **kwargs):
-        """Show a spinner row, run the parser, then replace it with its count."""
+    def run(self, label, count_key, func, *args, display_key=None, display_value=None,
+            artifact=None, **kwargs):
+        """Show a spinner row, run the parser, then replace it with its count.
+
+        ``artifact`` is the catalog name from ``pyhindsight.artifact_filter`` that
+        ``--only`` / ``--skip`` select on. When the run's filter excludes it, the
+        parser is not called and the row reads "skipped" instead of a count, so a
+        filtered-out artifact never reads as an artifact that wasn't there.
+        """
         group_rows = self.output_groups.setdefault(self.current_group, [])
         display_label = display_value or self.browser.artifacts_display.get(display_key, label)
+
+        artifact_filter = self.browser.artifact_filter
+        if artifact_filter and not artifact_filter.should_parse(artifact):
+            artifact_filter.note_skipped(artifact)
+            self.browser.artifacts_status[count_key] = ARTIFACT_STATUS_SKIPPED
+            log.info(f' - Skipping {label} ({artifact}); excluded by artifact filter')
+            # Neither artifacts_counts nor artifacts_display is written for a skipped
+            # artifact. Absent from artifacts_counts means "not parsed", which has to
+            # stay distinguishable from a count of zero -- and consumers that iterate
+            # artifacts_display key off it while defaulting the count to 0
+            # (parsed_artifacts.tpl does exactly that), so recording the label alone
+            # would render the artifact as "0" rather than omitting it.
+            group_rows.append((display_label, self._bracketed_count('skipped')))
+            self._live.update(self._build_live_view())
+            return
+
         group_rows.append((display_label, self._bracketed_spinner()))
         self._live.update(self._build_live_view())
         func(*args, **kwargs)
@@ -146,6 +176,8 @@ class ProcessingDisplay:
         text.append("[ ", style="dim")
         if str(count) == "Failed":
             text.append(f"{count:>{self.count_width}}", style="red")
+        elif str(count) == "skipped":
+            text.append(f"{count:>{self.count_width}}", style="yellow")
         elif str(count) == "0":
             text.append(f"{count:>{self.count_width}}", style="dim")
         else:
@@ -157,7 +189,10 @@ class ProcessingDisplay:
 class WebBrowser(object):
     def __init__(
             self, profile_path, browser_name, cache_path=None, version=None, display_version=None,
-            timezone=None, structure=None, no_copy=None, temp_dir=None):
+            timezone=None, structure=None, no_copy=None, temp_dir=None, artifact_filter=None):
+        # A permissive filter by default, so a browser constructed directly (tests,
+        # library use) parses everything without the caller having to supply one.
+        self.artifact_filter = artifact_filter or ArtifactFilter()
         self.profile_path = profile_path
         self.browser_name = browser_name
         self.cache_path = cache_path
@@ -171,6 +206,9 @@ class WebBrowser(object):
         self.parsed_sync_data = []
         self.artifacts_counts = {}
         self.artifacts_display = {}
+        # {count_key: status}, for artifacts that produced an outcome rather than a
+        # count. See finalize_artifact_status().
+        self.artifacts_status = {}
         self.preferences = []
         self.no_copy = no_copy
         self.temp_dir = temp_dir
@@ -179,6 +217,30 @@ class WebBrowser(object):
 
         if self.version is None:
             self.version = []
+
+    def finalize_artifact_status(self):
+        """Move sentinel status strings out of `artifacts_counts` into `artifacts_status`.
+
+        Parsers signal a failed parse by writing the string ``'Failed'`` into
+        `artifacts_counts` -- the same dict that holds record counts. Mixing the two
+        forces every consumer to special-case strings, and the aggregation in
+        AnalysisSession used to resolve them by substituting ``0``, silently turning
+        "couldn't read this artifact" into "read it and found nothing". Those are
+        opposite findings, so the status is moved somewhere it can't be mistaken for a
+        count, and the key is removed from `artifacts_counts` entirely: absent means
+        "no count was produced", which stays distinguishable from a count of zero.
+
+        Called at the end of each browser's process(), after the live display has
+        finished reading counts, so the on-screen "[ Failed ]" rendering is unaffected.
+        Idempotent.
+        """
+        for count_key, value in list(self.artifacts_counts.items()):
+            if isinstance(value, str):
+                # Recorded verbatim (lowercased) rather than validated against a known
+                # set. A status nobody anticipated is still information, and dropping
+                # or rejecting it is how the old code lost failures.
+                self.artifacts_status[count_key] = value.lower()
+                del self.artifacts_counts[count_key]
 
     @staticmethod
     def format_processing_output(name, items):
