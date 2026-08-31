@@ -11,8 +11,6 @@ FIXTURE_DIR = os.path.join('tests', 'fixtures', 'firefox')
 def _make_firefox():
     ff = Firefox(FIXTURE_DIR, no_copy=True, temp_dir=None,
                  timezone=datetime.timezone.utc)
-    ff.artifacts_counts = {}
-    ff.artifacts_display = {}
     ff.parsed_artifacts = []
     ff.parsed_storage = []
     ff.preferences = []
@@ -23,13 +21,13 @@ class TestFirefoxDownloads(unittest.TestCase):
 
     def test_get_downloads_count(self):
         ff = _make_firefox()
-        ff.get_downloads(FIXTURE_DIR, 'places.sqlite')
-        self.assertEqual(ff.artifacts_counts.get('places.sqlite_downloads'), 1)
+        reported = ff.get_downloads(FIXTURE_DIR, 'places.sqlite')
+        self.assertEqual(reported, 1)
         self.assertEqual(len(ff.parsed_artifacts), 1)
 
     def test_download_fields(self):
         ff = _make_firefox()
-        ff.get_downloads(FIXTURE_DIR, 'places.sqlite')
+        reported = ff.get_downloads(FIXTURE_DIR, 'places.sqlite')
 
         dl = ff.parsed_artifacts[0]
         self.assertEqual(dl.row_type, 'download')

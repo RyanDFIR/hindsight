@@ -12,8 +12,6 @@ REF_DT = datetime.datetime(2024, 1, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
 def _make_firefox():
     ff = Firefox(FIXTURE_DIR, no_copy=True, temp_dir=None,
                  timezone=datetime.timezone.utc)
-    ff.artifacts_counts = {}
-    ff.artifacts_display = {}
     ff.parsed_artifacts = []
     ff.parsed_storage = []
     ff.preferences = []
@@ -24,10 +22,10 @@ class TestFirefoxHistory(unittest.TestCase):
 
     def test_get_history(self):
         ff = _make_firefox()
-        ff.get_history(FIXTURE_DIR, 'places.sqlite')
+        reported = ff.get_history(FIXTURE_DIR, 'places.sqlite')
 
         self.assertEqual(len(ff.parsed_artifacts), 3)
-        self.assertEqual(ff.artifacts_counts.get('places.sqlite'), 3)
+        self.assertEqual(reported, 3)
 
         wiki = [a for a in ff.parsed_artifacts
                 if a.url == 'https://en.wikipedia.org/wiki/Computer_forensics']
@@ -40,9 +38,9 @@ class TestFirefoxHistory(unittest.TestCase):
 
     def test_get_bookmarks(self):
         ff = _make_firefox()
-        ff.get_bookmarks(FIXTURE_DIR, 'places.sqlite')
+        reported = ff.get_bookmarks(FIXTURE_DIR, 'places.sqlite')
 
-        self.assertEqual(ff.artifacts_counts.get('Bookmarks'), 2)
+        self.assertEqual(reported, 2)
         bookmark_urls = [a for a in ff.parsed_artifacts if a.row_type == 'bookmark']
         folders = [a for a in ff.parsed_artifacts if a.row_type == 'bookmark folder']
         self.assertEqual(len(bookmark_urls), 1)
@@ -55,7 +53,7 @@ class TestFirefoxHistory(unittest.TestCase):
 
     def test_determine_version(self):
         ff = _make_firefox()
-        ff.get_history(FIXTURE_DIR, 'places.sqlite')
+        reported = ff.get_history(FIXTURE_DIR, 'places.sqlite')
         ff.determine_version(FIXTURE_DIR, 'places.sqlite')
 
         self.assertIn(80, ff.version)

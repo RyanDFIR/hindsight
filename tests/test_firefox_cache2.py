@@ -12,8 +12,6 @@ CACHE_DIR = os.path.join(FIXTURE_DIR, 'cache2', 'entries')
 def _make_firefox():
     ff = Firefox(FIXTURE_DIR, no_copy=True, temp_dir=None,
                  timezone=datetime.timezone.utc)
-    ff.artifacts_counts = {}
-    ff.artifacts_display = {}
     ff.parsed_artifacts = []
     ff.parsed_storage = []
     ff.preferences = []
@@ -67,9 +65,9 @@ class TestFirefoxCache2(unittest.TestCase):
 
     def test_get_cache_emits_cacheitem(self):
         ff = _make_firefox()
-        ff.get_cache(CACHE_DIR)
+        reported = ff.get_cache(CACHE_DIR)
 
-        self.assertEqual(ff.artifacts_counts.get('Cache'), 1)
+        self.assertEqual(reported, 1)
         item = ff.parsed_artifacts[0]
         self.assertEqual(item.row_type, 'cache')
         self.assertEqual(item.url,

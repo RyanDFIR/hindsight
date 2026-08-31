@@ -10,14 +10,19 @@
             </tr>
          % display_items = list(artifacts_display.keys())
          % status_summary = artifact_status_summary if defined('artifact_status_summary') else {}
+         % described = artifact_status_descriptions if defined('artifact_status_descriptions') else {}
          % def cell(key):
+         %     # A count of 0 means "parsed, found nothing". Anything else -- failed,
+         %     # skipped, or parsed-but-incomplete -- says so instead of showing a bare
+         %     # number that reads as a complete result.
          %     statuses = status_summary.get(key)
          %     count = artifacts_counts.get(key)
+         %     detail = described.get(key) or ('/'.join(sorted(statuses)) if statuses else '')
          %     if statuses and count is None:
-         %         return '/'.join(sorted(statuses))
+         %         return detail
          %     end
          %     if statuses:
-         %         return '{} ({})'.format(count, '/'.join(sorted(statuses)))
+         %         return '{} ({})'.format(count, detail)
          %     end
          %     return 0 if count is None else count
          % end

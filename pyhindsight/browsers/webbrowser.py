@@ -1,9 +1,11 @@
 import abc
+import dataclasses
 import datetime
 import hashlib
 import logging
 import sqlite3
 import sys
+import typing
 import urllib.parse
 import rich.align
 import rich.columns
@@ -18,11 +20,148 @@ from pyhindsight.artifact_filter import ArtifactFilter
 
 log = logging.getLogger(__name__)
 
-# Per-artifact outcomes that are not record counts. These live in `artifacts_status`
-# rather than `artifacts_counts` so that a count is always a count: "couldn't read this"
-# and "read it, found nothing" have to stay distinguishable in output.
+# Per-artifact outcomes that are not record counts. A count is always a count:
+# "couldn't read this" and "read it, found nothing" have to stay distinguishable.
 ARTIFACT_STATUS_FAILED = 'failed'
 ARTIFACT_STATUS_SKIPPED = 'skipped'
+ARTIFACT_STATUS_PARTIAL = 'partial'
+
+# Marks a row whose parser is still running, so the table renders a spinner for it.
+_SPINNER = object()
+
+# Every collection a parser can deliver results into. The driver snapshots their sizes
+# around each parser so it can catch the one failure a count cannot reveal on its own:
+# results parsed and counted, then dropped before they reach any of these.
+RESULT_COLLECTIONS = (
+    'parsed_artifacts',
+    'parsed_storage',
+    'parsed_extension_data',
+    'parsed_sync_data',
+    'preferences',
+    'installed_extensions',
+    '_extensions_by_id',
+    'session_structure',
+)
+
+
+
+class ParseResult(typing.NamedTuple):
+    """What a parser produced, when some of it could not be read.
+
+    Failures come at two levels, and they are not interchangeable:
+
+    * **records** -- the source was opened and enumerated, and individual items in it
+      could not be decoded. Coverage is known and the loss is bounded: "900 entries,
+      5 of them corrupt".
+    * **sources** -- a whole store, database, origin folder, or file could not be
+      opened at all. Coverage is *unknown* and the loss is unbounded: the source might
+      have held nothing or a hundred thousand records, and there is no way to tell.
+
+    That asymmetry is why they are counted separately. A count with unparsed sources
+    behind it cannot be used to say "the profile contained N of these", which is
+    exactly the kind of claim a report should not make by accident.
+    """
+
+    count: int
+    unparsed_sources: int = 0
+    unparsed_records: int = 0
+
+    @property
+    def is_partial(self):
+        return bool(self.unparsed_sources or self.unparsed_records)
+
+
+class ParseFailures:
+    """Collects a parser's unparsed sources and records, logging each as it happens.
+
+    A parser that swallows an exception to keep going should record it here instead of
+    only logging it, so what the run reports and what the log explains cannot drift.
+    The per-failure detail is written at the moment of failure (naming the source and
+    the reason); the *totals* are logged by the driver from the recorded result, so the
+    numbers in the log are by construction the numbers on screen.
+    """
+
+    def __init__(self, artifact_label):
+        self.artifact_label = artifact_label
+        self.sources = []
+        self.records = []
+        self._seen = set()
+
+    def _note(self, bucket, name, reason):
+        """Add (name, reason) once. Re-reporting the same failure would inflate the
+        totals: some parsers read a file in more than one pass, and a file that is
+        truncated fails identically in each of them -- that is one unparsed source, not
+        one per pass."""
+        entry = (str(name), str(reason))
+        if entry in self._seen:
+            return False
+        self._seen.add(entry)
+        bucket.append(entry)
+        return True
+
+    def source(self, name, reason):
+        """Record a store/database/origin/file that could not be read at all."""
+        if self._note(self.sources, name, reason):
+            log.warning(f' - Unparsed source in {self.artifact_label}: {name} ({reason})')
+
+    def record(self, name, reason):
+        """Record a single item that could not be decoded."""
+        if self._note(self.records, name, reason):
+            log.debug(f' - Unparsed record in {self.artifact_label}: {name} ({reason})')
+
+    def result(self, count):
+        """Package `count` with what was lost, for the parser to return."""
+        return ParseResult(count, len(self.sources), len(self.records))
+
+
+
+
+@dataclasses.dataclass
+class ArtifactResult:
+    """What one artifact produced within one profile.
+
+    `count` and `status` are mutually exclusive in practice: an artifact either
+    yielded a number of records or it didn't yield one (and `status` says why).
+    `label` is how the artifact is named on screen and in output.
+
+    These three facets used to live in three parallel dicts (`artifacts_counts`,
+    `artifacts_display`, `artifacts_status`) with nothing keeping their keys in step,
+    so an artifact could pick up a label under one key and a count under another and
+    be reported twice -- once correctly, once as a phantom "0". One record per
+    artifact per profile makes that impossible.
+    """
+
+    key: str
+    label: str = None
+    count: int = None
+    status: str = None
+    # Set when the artifact parsed but some of it could not be read. See ParseResult
+    # for why the two levels are counted separately.
+    unparsed_sources: int = 0
+    unparsed_records: int = 0
+    # Why this artifact could not be read, when it couldn't -- kept on the record so a
+    # summary can state the reason rather than pointing at another log line.
+    detail: str = None
+
+    @property
+    def is_empty(self):
+        return self.label is None and self.count is None and self.status is None
+
+    @property
+    def is_partial(self):
+        return bool(self.unparsed_sources or self.unparsed_records)
+
+    def describe_unparsed(self):
+        """'3 sources, 5 records unparsed', or '' when nothing was lost."""
+        parts = []
+        if self.unparsed_sources:
+            parts.append(f'{self.unparsed_sources} '
+                         f'source{"s" if self.unparsed_sources != 1 else ""}')
+        if self.unparsed_records:
+            parts.append(f'{self.unparsed_records} '
+                         f'record{"s" if self.unparsed_records != 1 else ""}')
+        return f'{", ".join(parts)} unparsed' if parts else ''
+
 
 # Sorts before any real timestamp; only ever used to order un-timestamped items among
 # themselves, never rendered.
@@ -60,7 +199,10 @@ class ProcessingDisplay:
         with self.processing_display(["Group A", "Group B"]) as driver:
             driver.group("Group A")
             driver.run('URL', 'History', self.get_history, path, 'History', ...,
-                       display_key='History', display_value='URL records')
+                       display_value='URL records', artifact='history')
+
+    The parser returns its record count (or None if it could not read the artifact);
+    the driver records it under `count_key`. See `run()`.
     """
 
     count_width = 7
@@ -87,65 +229,191 @@ class ProcessingDisplay:
         """Set the group subsequent run() calls are bucketed under."""
         self.current_group = name
 
-    def run(self, label, count_key, func, *args, display_key=None, display_value=None,
+    def run(self, label, count_key, func, *args, display_value=None,
             artifact=None, **kwargs):
-        """Show a spinner row, run the parser, then replace it with its count.
+        """Show a spinner row, run the parser, then record what it produced.
+
+        This is the single place an artifact result is written. The driver already
+        knows the artifact's key, its label, and whether the run's filter wants it, so a
+        parser only has to say what it found. It returns one of:
+
+        * an ``int`` -- that many records, everything readable;
+        * a ``ParseResult`` -- a count plus what could not be read (see ParseFailures);
+        * ``None`` -- the artifact could not be read at all.
+
+        Parsers used to write into a shared `artifacts_counts` dict under a key they
+        derived themselves, which meant two layers were independently naming the same
+        artifact -- the source of every count/label/status key mismatch this removes.
 
         ``artifact`` is the catalog name from ``pyhindsight.artifact_filter`` that
-        ``--only`` / ``--skip`` select on. When the run's filter excludes it, the
-        parser is not called and the row reads "skipped" instead of a count, so a
-        filtered-out artifact never reads as an artifact that wasn't there.
+        ``--only`` / ``--skip`` select on. An excluded artifact is recorded as skipped
+        and its parser is never called, so a filtered-out artifact never reads as an
+        artifact that wasn't there.
         """
         group_rows = self.output_groups.setdefault(self.current_group, [])
-        display_label = display_value or self.browser.artifacts_display.get(display_key, label)
+        display_label = display_value or label
 
         artifact_filter = self.browser.artifact_filter
         if artifact_filter and not artifact_filter.should_parse(artifact):
             artifact_filter.note_skipped(artifact)
-            self.browser.artifacts_status[count_key] = ARTIFACT_STATUS_SKIPPED
+            self.browser.record_artifact(
+                count_key, label=display_label, status=ARTIFACT_STATUS_SKIPPED)
             log.info(f' - Skipping {label} ({artifact}); excluded by artifact filter')
-            # Neither artifacts_counts nor artifacts_display is written for a skipped
-            # artifact. Absent from artifacts_counts means "not parsed", which has to
-            # stay distinguishable from a count of zero -- and consumers that iterate
-            # artifacts_display key off it while defaulting the count to 0
-            # (parsed_artifacts.tpl does exactly that), so recording the label alone
-            # would render the artifact as "0" rather than omitting it.
-            group_rows.append((display_label, self._bracketed_count('skipped')))
+            group_rows.append((display_label, 'skipped', None))
             self._live.update(self._build_live_view())
             return
 
-        group_rows.append((display_label, self._bracketed_spinner()))
-        self._live.update(self._build_live_view())
-        func(*args, **kwargs)
-        if display_key and display_value:
-            self.browser.artifacts_display[display_key] = display_value
-        group_rows[-1] = (
-            display_label, self._bracketed_count(self.browser.artifacts_counts.get(count_key, "0")))
+        group_rows.append((display_label, _SPINNER, None))
         self._live.update(self._build_live_view())
 
-    def _build_table(self, rows, header_label):
+        sizes_before = self.browser.collection_sizes()
+        self.browser.last_open_failure = None
+        returned = func(*args, **kwargs)
+        sizes_after = self.browser.collection_sizes()
+        open_failure = self.browser.last_open_failure
+
+        if returned is None:
+            # The parser could not read its artifact. Recorded as a status, never as a
+            # count of 0, so "could not read this" stays distinguishable from "read it
+            # and found nothing".
+            detail = f'{open_failure[0]}: {open_failure[1]}' if open_failure else None
+            result = self.browser.record_artifact(
+                count_key, label=display_label, status=ARTIFACT_STATUS_FAILED,
+                detail=detail)
+            cell = 'Failed'
+            log.warning(f' - {display_label}: could not be read'
+                        + (f' -- {detail}' if detail else ''))
+        elif isinstance(returned, ParseResult):
+            result = self.browser.record_artifact(
+                count_key, label=display_label, count=returned.count,
+                unparsed_sources=returned.unparsed_sources,
+                unparsed_records=returned.unparsed_records,
+                status=ARTIFACT_STATUS_PARTIAL if returned.is_partial else None)
+            cell = returned.count
+        else:
+            result = self.browser.record_artifact(
+                count_key, label=display_label, count=returned)
+            cell = returned
+
+        self._reconcile_delivery(result, sizes_before, sizes_after)
+
+        # The summary line is built from the recorded result, so the totals in the log
+        # are by construction the totals rendered on screen.
+        if result.is_partial:
+            log.warning(f' - {display_label}: parsed {result.count}; '
+                        f'{result.describe_unparsed()}')
+        elif result.count is not None:
+            log.info(f' - {display_label}: parsed {result.count}')
+
+        group_rows[-1] = (display_label, cell, self._unparsed_note(result))
+        self._live.update(self._build_live_view())
+
+    @staticmethod
+    def _reconcile_delivery(result, sizes_before, sizes_after):
+        """Warn when a parser reported records but contributed none.
+
+        The count and the records travel separately: the count is returned, the records
+        are appended to one of the browser's collections. If a parser reports a positive
+        count and nothing grew, the records were built and then dropped -- the report
+        shows a confident number for data that is not in the output. That has happened,
+        and a count on its own cannot reveal it, because the count is correct.
+
+        Deliberately a weak invariant ("contributed *something*") rather than
+        "contributed exactly `count`": several parsers legitimately report a number that
+        is not the number of rows they emit -- Firefox's sessionstore counts entries seen
+        but emits de-duplicated rows, and Chrome's get_extensions counts extensions on
+        disk while its data goes to a different structure entirely.
+        """
+        if not result.count:
+            return
+        grew = any(sizes_after.get(name, 0) > sizes_before.get(name, 0)
+                   for name in set(sizes_after) | set(sizes_before))
+        if not grew:
+            log.error(
+                f' - {result.label or result.key}: reported {result.count} records but '
+                f'contributed none to the output; results were parsed and then dropped')
+
+    @staticmethod
+    def _unparsed_note(result):
+        """The "Unparsed" cell for a row, or None when the artifact was read in full.
+
+        Written without a leading minus: "1429 records" is a second fact about the
+        artifact, not a subtraction from the parsed count. Sources come first and are
+        coloured more urgently than records -- a source that would not open could have
+        held anything, so it is the finding that stops the parsed number being usable
+        as a total.
+        """
+        if not result.is_partial:
+            return None
+        text = rich.text.Text()
+        if result.unparsed_sources:
+            plural = 's' if result.unparsed_sources != 1 else ''
+            text.append(f'{result.unparsed_sources} source{plural}', style='red')
+        if result.unparsed_sources and result.unparsed_records:
+            text.append(', ', style='dim')
+        if result.unparsed_records:
+            plural = 's' if result.unparsed_records != 1 else ''
+            text.append(f'{result.unparsed_records} record{plural}', style='yellow')
+        return text
+
+    note_width = 22
+
+    def _render_cell(self, value):
+        """The bracketed count for one row."""
+        if value is _SPINNER:
+            return self._bracketed_spinner()
+        return self._bracketed_count(value)
+
+    def _any_unparsed(self):
+        """True if anything anywhere in this profile went unparsed.
+
+        Decided once for the whole run rather than per group: a column present on some
+        groups and absent on others gives the tables different widths, and the sections
+        stop lining up under each other.
+        """
+        return any(row[2] is not None
+                   for rows in self.output_groups.values() for row in rows)
+
+    def _build_table(self, rows, header_label, show_unparsed):
+        label_width = self.table_width - self.count_width - 8
+        count_width = self.count_width + 8
+
         # Header row as separate table with center alignment
         header = rich.table.Table(show_header=False, box=None, expand=False)
-        header.add_column(justify="left", width=self.table_width - self.count_width - 8, style="bold on #333333")
-        header.add_column(justify="center", width=self.count_width + 8, style="bold on #333333")
-        header.add_row(rich.text.Text(header_label, style="bold"), rich.text.Text("Count", style="bold"))
+        header.add_column(justify="left", width=label_width, style="bold on #333333")
+        header.add_column(justify="center", width=count_width, style="bold on #333333")
+        cells = [rich.text.Text(header_label, style="bold"),
+                 rich.text.Text("Parsed", style="bold")]
+        if show_unparsed:
+            header.add_column(justify="left", width=self.note_width,
+                              style="bold on #333333")
+            cells.append(rich.text.Text("Unparsed", style="bold"))
+        header.add_row(*cells)
 
         # Content table with right alignment
         table = rich.table.Table(show_header=False, box=None, expand=False)
-        table.add_column(overflow="fold", justify="right", width=self.table_width - self.count_width - 8)
-        table.add_column(justify="center", width=self.count_width + 8, no_wrap=True)
-        for row_label, row_count in rows:
-            table.add_row(row_label, row_count)
+        table.add_column(overflow="fold", justify="right", width=label_width)
+        table.add_column(justify="center", width=count_width, no_wrap=True)
+        if show_unparsed:
+            table.add_column(justify="left", width=self.note_width, no_wrap=True)
+        for row_label, value, note in rows:
+            cell = self._render_cell(value)
+            if show_unparsed:
+                table.add_row(row_label, cell,
+                              note if note is not None else rich.text.Text(''))
+            else:
+                table.add_row(row_label, cell)
         return rich.console.Group(header, table)
 
     def _build_group_tables(self):
+        show_unparsed = self._any_unparsed()
         tables = []
         for group_name in self.group_order:
             rows = self.output_groups.get(group_name, [])
             if not rows:
                 continue
-            inner_table = self._build_table(rows, group_name)
-            tables.append(rich.align.Align.center(inner_table))
+            tables.append(rich.align.Align.center(
+                self._build_table(rows, group_name, show_unparsed)))
             tables.append(rich.text.Text(""))  # Padding between groups
         return rich.console.Group(*tables)
 
@@ -171,10 +439,12 @@ class ProcessingDisplay:
             padding=(0, 0))
         return spinner
 
-    def _bracketed_count(self, count):
+    def _bracketed_count(self, count, style=None):
         text = rich.text.Text()
         text.append("[ ", style="dim")
-        if str(count) == "Failed":
+        if style is not None:
+            text.append(f"{count:>{self.count_width}}", style=style)
+        elif str(count) == "Failed":
             text.append(f"{count:>{self.count_width}}", style="red")
         elif str(count) == "skipped":
             text.append(f"{count:>{self.count_width}}", style="yellow")
@@ -204,11 +474,13 @@ class WebBrowser(object):
         self.parsed_storage = []
         self.parsed_extension_data = []
         self.parsed_sync_data = []
-        self.artifacts_counts = {}
-        self.artifacts_display = {}
-        # {count_key: status}, for artifacts that produced an outcome rather than a
-        # count. See finalize_artifact_status().
-        self.artifacts_status = {}
+        # One record per artifact, keyed by the artifact's count key. The three
+        # `artifacts_*` mappings below are views onto these records, not separate
+        # stores, so a label and a count can never end up under different keys.
+        self.artifact_results = {}
+        # (path, reason) of the most recent database that could not be opened; the
+        # driver consumes it so a failed artifact can name the file and the reason.
+        self.last_open_failure = None
         self.preferences = []
         self.no_copy = no_copy
         self.temp_dir = temp_dir
@@ -218,29 +490,84 @@ class WebBrowser(object):
         if self.version is None:
             self.version = []
 
-    def finalize_artifact_status(self):
-        """Move sentinel status strings out of `artifacts_counts` into `artifacts_status`.
+    def describe_open_failure(self, default='could not be opened'):
+        """Why the last database open failed, for a parser to attach to an unparsed source.
 
-        Parsers signal a failed parse by writing the string ``'Failed'`` into
-        `artifacts_counts` -- the same dict that holds record counts. Mixing the two
-        forces every consumer to special-case strings, and the aggregation in
-        AnalysisSession used to resolve them by substituting ``0``, silently turning
-        "couldn't read this artifact" into "read it and found nothing". Those are
-        opposite findings, so the status is moved somewhere it can't be mistaken for a
-        count, and the key is removed from `artifacts_counts` entirely: absent means
-        "no count was produced", which stays distinguishable from a count of zero.
-
-        Called at the end of each browser's process(), after the live display has
-        finished reading counts, so the on-screen "[ Failed ]" rendering is unaffected.
-        Idempotent.
+        Without this a parser can only say "could not be opened" while the actual reason
+        ("file is not a database", "database disk image is malformed") sits in a separate
+        line written by a different module.
         """
-        for count_key, value in list(self.artifacts_counts.items()):
-            if isinstance(value, str):
-                # Recorded verbatim (lowercased) rather than validated against a known
-                # set. A status nobody anticipated is still information, and dropping
-                # or rejecting it is how the old code lost failures.
-                self.artifacts_status[count_key] = value.lower()
-                del self.artifacts_counts[count_key]
+        if self.last_open_failure:
+            return self.last_open_failure[1]
+        return default
+
+    def collection_sizes(self):
+        """{collection name: current size} for everything a parser can deliver into.
+
+        Used by the driver to reconcile what a parser *reported* against what it
+        actually contributed. A count is derived from a list the parser built; the
+        records reach output through a separate `extend`. Those two can disagree --
+        a misplaced return, an early exit, a lost extend -- and the count alone gives
+        no hint, because it is right.
+        """
+        sizes = {}
+        for name in RESULT_COLLECTIONS:
+            value = getattr(self, name, None)
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                # e.g. installed_extensions is {'data': [...], 'presentation': ...}
+                data = value.get('data')
+                sizes[name] = len(data) if isinstance(data, list) else len(value)
+                continue
+            try:
+                sizes[name] = len(value)
+            except TypeError:
+                continue
+        return sizes
+
+    def record_artifact(self, key, label=None, count=None, status=None,
+                        unparsed_sources=None, unparsed_records=None, detail=None):
+        """Record what one artifact produced in this profile.
+
+        Called by ``ProcessingDisplay.run()``, which is the only writer. Fields left
+        as None are not overwritten, so a later call can add to an existing record.
+        """
+        result = self.artifact_results.get(key)
+        if result is None:
+            result = self.artifact_results[key] = ArtifactResult(key)
+        if label is not None:
+            result.label = label
+        if count is not None:
+            result.count = count
+        if status is not None:
+            result.status = status
+        if unparsed_sources is not None:
+            result.unparsed_sources = unparsed_sources
+        if unparsed_records is not None:
+            result.unparsed_records = unparsed_records
+        if detail is not None:
+            result.detail = detail
+        return result
+
+    # The three mappings below are derived from `artifact_results`, which is the single
+    # source of truth. They are read-only on purpose: they used to be three independent
+    # dicts that parsers wrote into directly, and nothing kept their keys in step.
+
+    @property
+    def artifacts_counts(self):
+        """{artifact key: record count} for artifacts that produced a count."""
+        return {k: r.count for k, r in self.artifact_results.items() if r.count is not None}
+
+    @property
+    def artifacts_display(self):
+        """{artifact key: human-readable label}."""
+        return {k: r.label for k, r in self.artifact_results.items() if r.label is not None}
+
+    @property
+    def artifacts_status(self):
+        """{artifact key: 'failed'|'skipped'} for artifacts that produced no count."""
+        return {k: r.status for k, r in self.artifact_results.items() if r.status is not None}
 
     @staticmethod
     def format_processing_output(name, items):
@@ -276,7 +603,9 @@ class WebBrowser(object):
             # Copy and connect to copy of SQLite DB
             conn = utils.open_sqlite_db(self, path, database)
             if not conn:
-                self.artifacts_counts[database] = 'Failed'
+                # No artifact result is recorded here: this is schema probing, not a
+                # parse. Whichever parser needs this database will report its own
+                # failure, under its own key.
                 return
             try:
                 cursor = conn.cursor()

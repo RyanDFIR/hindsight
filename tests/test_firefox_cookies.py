@@ -12,8 +12,6 @@ REF_DT = datetime.datetime(2024, 1, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
 def _make_firefox():
     ff = Firefox(FIXTURE_DIR, no_copy=True, temp_dir=None,
                  timezone=datetime.timezone.utc)
-    ff.artifacts_counts = {}
-    ff.artifacts_display = {}
     ff.parsed_artifacts = []
     ff.parsed_storage = []
     ff.preferences = []
@@ -23,11 +21,11 @@ def _make_firefox():
 class TestFirefoxCookies(unittest.TestCase):
     def test_get_cookies_count(self):
         ff = _make_firefox()
-        ff.get_cookies(FIXTURE_DIR, 'cookies.sqlite')
+        reported = ff.get_cookies(FIXTURE_DIR, 'cookies.sqlite')
 
         # 2 cookies, only the persistent one has a distinct lastAccessed,
         # so we expect 2 created + 1 accessed = 3 rows.
-        self.assertEqual(ff.artifacts_counts.get('Cookies'), 3)
+        self.assertEqual(reported, 3)
 
         created = [a for a in ff.parsed_artifacts
                    if a.row_type == 'cookie (created)']
@@ -38,7 +36,7 @@ class TestFirefoxCookies(unittest.TestCase):
 
     def test_persistent_cookie_attributes(self):
         ff = _make_firefox()
-        ff.get_cookies(FIXTURE_DIR, 'cookies.sqlite')
+        reported = ff.get_cookies(FIXTURE_DIR, 'cookies.sqlite')
 
         wiki = [a for a in ff.parsed_artifacts
                 if a.name == 'WMF-Last-Access' and a.row_type == 'cookie (created)']
@@ -54,7 +52,7 @@ class TestFirefoxCookies(unittest.TestCase):
 
     def test_session_cookie_no_expiry(self):
         ff = _make_firefox()
-        ff.get_cookies(FIXTURE_DIR, 'cookies.sqlite')
+        reported = ff.get_cookies(FIXTURE_DIR, 'cookies.sqlite')
 
         session = [a for a in ff.parsed_artifacts
                    if a.name == 'session' and a.row_type == 'cookie (created)']

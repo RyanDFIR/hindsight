@@ -12,8 +12,6 @@ REF_DT = datetime.datetime(2024, 1, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
 def _make_firefox():
     ff = Firefox(FIXTURE_DIR, no_copy=True, temp_dir=None,
                  timezone=datetime.timezone.utc)
-    ff.artifacts_counts = {}
-    ff.artifacts_display = {}
     ff.parsed_artifacts = []
     ff.parsed_storage = []
     ff.preferences = []
@@ -23,14 +21,14 @@ def _make_firefox():
 class TestFirefoxFormHistory(unittest.TestCase):
     def test_form_history_count(self):
         ff = _make_firefox()
-        ff.get_form_history(FIXTURE_DIR, 'formhistory.sqlite')
+        reported = ff.get_form_history(FIXTURE_DIR, 'formhistory.sqlite')
         # Two saved form fields in the fixture.
-        self.assertEqual(ff.artifacts_counts.get('formhistory.sqlite'), 2)
+        self.assertEqual(reported, 2)
         self.assertEqual(len(ff.parsed_artifacts), 2)
 
     def test_email_field(self):
         ff = _make_firefox()
-        ff.get_form_history(FIXTURE_DIR, 'formhistory.sqlite')
+        reported = ff.get_form_history(FIXTURE_DIR, 'formhistory.sqlite')
 
         email = [a for a in ff.parsed_artifacts if a.name == 'email']
         self.assertEqual(len(email), 1)
@@ -42,7 +40,7 @@ class TestFirefoxFormHistory(unittest.TestCase):
 
     def test_searchbar_field(self):
         ff = _make_firefox()
-        ff.get_form_history(FIXTURE_DIR, 'formhistory.sqlite')
+        reported = ff.get_form_history(FIXTURE_DIR, 'formhistory.sqlite')
 
         sb = [a for a in ff.parsed_artifacts if a.name == 'searchbar-history']
         self.assertEqual(len(sb), 1)

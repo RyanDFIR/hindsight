@@ -11,8 +11,6 @@ FIXTURE_DIR = os.path.join('tests', 'fixtures', 'firefox')
 def _make_firefox():
     ff = Firefox(FIXTURE_DIR, no_copy=True, temp_dir=None,
                  timezone=datetime.timezone.utc)
-    ff.artifacts_counts = {}
-    ff.artifacts_display = {}
     ff.parsed_artifacts = []
     ff.parsed_storage = []
     ff.preferences = []
@@ -22,9 +20,9 @@ def _make_firefox():
 class TestFirefoxPermissions(unittest.TestCase):
     def test_count_and_friendly_labels(self):
         ff = _make_firefox()
-        ff.get_permissions(FIXTURE_DIR, 'permissions.sqlite')
+        reported = ff.get_permissions(FIXTURE_DIR, 'permissions.sqlite')
 
-        self.assertEqual(ff.artifacts_counts.get('Permissions'), 2)
+        self.assertEqual(reported, 2)
 
         rows = {(a.url, a.key): a for a in ff.parsed_artifacts}
         wiki = rows[('https://en.wikipedia.org', 'desktop-notification')]
@@ -39,13 +37,13 @@ class TestFirefoxPermissions(unittest.TestCase):
 class TestFirefoxPrefs(unittest.TestCase):
     def test_prefs_count(self):
         ff = _make_firefox()
-        ff.get_preferences(FIXTURE_DIR, 'prefs.js')
+        reported = ff.get_preferences(FIXTURE_DIR, 'prefs.js')
         # Fixture has 10 user_pref lines; the parser also emits curated rows.
-        self.assertGreaterEqual(ff.artifacts_counts.get('Preferences'), 10)
+        self.assertGreaterEqual(reported, 10)
 
     def test_homepage_and_download_dir_surface(self):
         ff = _make_firefox()
-        ff.get_preferences(FIXTURE_DIR, 'prefs.js')
+        reported = ff.get_preferences(FIXTURE_DIR, 'prefs.js')
 
         pref_rows = ff.preferences[0]['data']
         by_name = {p['name']: p['value'] for p in pref_rows if p.get('name')}
@@ -60,10 +58,10 @@ class TestFirefoxPrefs(unittest.TestCase):
 class TestFirefoxLogins(unittest.TestCase):
     def test_login_emits_three_timestamp_rows(self):
         ff = _make_firefox()
-        ff.get_logins(FIXTURE_DIR, 'logins.json')
+        reported = ff.get_logins(FIXTURE_DIR, 'logins.json')
 
         # One credential, three distinct timestamps -> three rows.
-        self.assertEqual(ff.artifacts_counts.get('Logins'), 3)
+        self.assertEqual(reported, 3)
 
         row_types = sorted(a.row_type for a in ff.parsed_artifacts)
         self.assertEqual(row_types, [
@@ -79,9 +77,9 @@ class TestFirefoxLogins(unittest.TestCase):
 class TestFirefoxExtensions(unittest.TestCase):
     def test_one_extension_with_signed_state_label(self):
         ff = _make_firefox()
-        ff.get_extensions(FIXTURE_DIR, 'extensions.json')
+        reported = ff.get_extensions(FIXTURE_DIR, 'extensions.json')
 
-        self.assertEqual(ff.artifacts_counts.get('Extensions'), 1)
+        self.assertEqual(reported, 1)
         ext = ff.installed_extensions['data'][0]
         self.assertEqual(ext.ext_id, 'uBlock0@raymondhill.net')
         self.assertEqual(ext.name, 'uBlock Origin')

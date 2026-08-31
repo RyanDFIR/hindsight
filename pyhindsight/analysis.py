@@ -1,5 +1,6 @@
 import datetime
 import importlib
+import collections
 import json
 import logging
 import os
@@ -15,7 +16,8 @@ from pyhindsight import __version__
 from pyhindsight.artifact_filter import ArtifactFilter
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.browsers.firefox import Firefox
-from pyhindsight.browsers.webbrowser import WebBrowser, timeline_sort_key
+from pyhindsight.browsers.webbrowser import (
+    ARTIFACT_STATUS_FAILED, ARTIFACT_STATUS_SKIPPED, WebBrowser, timeline_sort_key)
 from pyhindsight.utils import friendly_date
 import pyhindsight.plugins
 import rich.align
@@ -490,12 +492,11 @@ class AnalysisSession(object):
         self.available_decrypts = available_decrypts
         self.selected_decrypts = selected_decrypts
         self.parsed_artifacts = parsed_artifacts
-        self.artifacts_display = artifacts_display
-        self.artifacts_counts = artifacts_counts
-        # {profile_path: {count_key: status}} for artifacts that produced an outcome
-        # rather than a count (a failed or skipped parse). Kept separate from
-        # artifacts_counts so a count is always a count.
-        self.artifacts_status = {}
+        # {profile_path: {artifact key: ArtifactResult}} -- the authoritative record of
+        # what every profile produced. Counts are summed across profiles for display,
+        # but an outcome ("the Cookies DB failed") is only meaningful attached to the
+        # profile it happened in, so the per-profile shape is what gets stored.
+        self.artifact_results = {}
         # Which artifacts this run is allowed to parse. A permissive filter by default,
         # so nothing changes for callers that don't set one. The same object is shared
         # by every profile's browser object, so its record of what was skipped covers
@@ -522,9 +523,6 @@ class AnalysisSession(object):
 
         if self.parsed_artifacts is None:
             self.parsed_artifacts = []
-
-        if self.artifacts_counts is None:
-            self.artifacts_counts = {}
 
         if self.parsed_storage is None:
             self.parsed_storage = []
@@ -610,41 +608,139 @@ class AnalysisSession(object):
                     log.warning(f'Error reading config file {config_path}: {e}')
         return {}
 
-    @staticmethod
-    def sum_dict_counts(dict1, dict2):
-        """Combine two dicts of record counts by summing the values of shared keys.
+    def record_profile_results(self, profile_path, browser_analysis):
+        """Store one profile's artifact records, keyed by the profile they came from.
 
-        Both dicts hold counts only. Non-count outcomes (a failed or skipped parse) live
-        in `artifacts_status` and are removed from the counts by
-        `WebBrowser.finalize_artifact_status()` before aggregation, so there is nothing
-        to special-case here.
-
-        This used to accept a ``'Failed'`` sentinel and resolve it by substituting ``0``,
-        which reported a failed parse as "found nothing" -- and, when another profile had
-        parsed the same artifact, dropped the failure entirely. A non-numeric value now
-        means a caller bypassed finalization, which is a bug worth surfacing rather than
-        papering over with a zero.
+        Replaces the old three-dict merge. Counts used to be summed into a single
+        session dict as each profile finished, which threw away which profile a number
+        came from -- and, when an artifact failed in one profile but parsed in another,
+        threw away the failure entirely.
         """
-        for key, value in list(dict2.items()):
-            if isinstance(value, str):
-                raise TypeError(
-                    f"artifacts_counts['{key}'] is the string {value!r}; counts must be "
-                    f"numeric. Status values belong in artifacts_status -- call "
-                    f"finalize_artifact_status() on the browser before aggregating.")
-            dict1[key] = dict1.setdefault(key, 0) + value
-        return dict1
+        results = getattr(browser_analysis, 'artifact_results', None)
+        if not results:
+            return
+        self.artifact_results.setdefault(profile_path, {}).update(results)
+        # Nothing is logged here: log_unparsed_summary() reports the same artifacts at
+        # the end of the run, better formatted and without repeating the profile path on
+        # every line. This used to log them too, immediately above that summary.
 
-    def record_artifact_status(self, profile_path, browser_analysis):
-        """Record one profile's non-count artifact outcomes (failed / skipped).
+    @property
+    def artifacts_counts(self):
+        """{artifact key: total records across all profiles}.
 
-        Kept per profile: summing counts across profiles is fine, but "the Cookies DB
-        failed" is only meaningful attached to the profile it failed in.
+        Derived, so it cannot drift from `artifact_results`. Artifacts that produced no
+        count (failed or skipped) are absent rather than zero.
         """
-        statuses = getattr(browser_analysis, 'artifacts_status', None)
-        if statuses:
-            self.artifacts_status.setdefault(profile_path, {}).update(statuses)
-            for count_key, status in sorted(statuses.items()):
-                log.info(f' - {count_key}: {status} ({profile_path})')
+        totals = {}
+        for results in self.artifact_results.values():
+            for key, result in results.items():
+                if result.count is not None:
+                    totals[key] = totals.get(key, 0) + result.count
+        return totals
+
+    @property
+    def artifacts_display(self):
+        """{artifact key: human-readable label}, merged across profiles."""
+        labels = {}
+        for results in self.artifact_results.values():
+            for key, result in results.items():
+                if result.label is not None:
+                    labels[key] = result.label
+        return labels
+
+    @property
+    def artifacts_status(self):
+        """{profile_path: {artifact key: status}} for artifacts that aren't a clean count."""
+        return {
+            profile: {k: r.status for k, r in results.items() if r.status is not None}
+            for profile, results in self.artifact_results.items()
+            if any(r.status is not None for r in results.values())
+        }
+
+    def artifact_status_descriptions(self):
+        """{artifact key: one-line status} for every artifact that isn't a clean count.
+
+        Built for output that shows one row per artifact; a partial parse describes
+        what was lost rather than just saying "partial".
+        """
+        described = {}
+        for key in self.artifact_status_summary():
+            description = self.describe_artifact_status(key)
+            if description:
+                described[key] = description
+        return described
+
+    def log_unparsed_summary(self):
+        """Write a consolidated "what was not parsed" block at the end of the run.
+
+        The per-artifact lines are correct but scattered through hundreds of lines of
+        progress output. This gathers them in one place, per profile, with the reason
+        attached, so "what is missing from this report, and why" has a single answer.
+
+        Formatted like the rest of the log -- a heading, then ` - ` items and `   - `
+        sub-items -- rather than as a banner, so it reads as part of the run.
+        """
+        anything = False
+        for profile_path, results in sorted(self.artifact_results.items()):
+            notable = [r for r in results.values() if r.status or r.is_partial]
+            if not notable:
+                continue
+            if not anything:
+                log.info('Not Parsed items (summary)')
+                anything = True
+            log.info(f' - Profile: {profile_path}')
+            for result in sorted(notable, key=lambda r: (r.status or '', r.key)):
+                label = result.label or result.key
+                if result.status == ARTIFACT_STATUS_SKIPPED:
+                    log.info(f'   - {label}: not parsed; excluded by --only/--skip')
+                elif result.status == ARTIFACT_STATUS_FAILED:
+                    reason = result.detail or 'reason not recorded'
+                    log.info(f'   - {label}: not parsed; {reason}')
+                elif result.is_partial:
+                    log.info(f'   - {label}: parsed {result.count}, '
+                             f'{result.describe_unparsed()}; each one is logged above '
+                             f'as "Unparsed source in {result.key}" / '
+                             f'"Unparsed record in {result.key}"')
+        if anything:
+            sources, records, artifacts = self.unparsed_totals()
+            if sources or records:
+                log.info(f' - Totals: {sources} source(s) and {records} record(s) '
+                         f'unparsed across {artifacts} artifact(s)')
+                if sources:
+                    log.info('   - An unparsed source is a whole store or file that '
+                             'could not be opened; how much it held is unknown, so '
+                             'counts for that artifact are a floor, not a total')
+
+    def unparsed_totals(self):
+        """(sources, records, artifacts) not read across the whole run.
+
+        Sources and records are counted separately because they answer different
+        questions: unparsed records are a bounded loss within a source that *was*
+        enumerated, while an unparsed source could have held any number of records, so
+        it caps what the run's totals can be used to claim.
+        """
+        sources = records = artifacts = 0
+        for results in self.artifact_results.values():
+            for result in results.values():
+                if result.is_partial:
+                    artifacts += 1
+                    sources += result.unparsed_sources
+                    records += result.unparsed_records
+        return sources, records, artifacts
+
+    def describe_unparsed_totals(self):
+        """One line for the end-of-run summary, or None if nothing was lost."""
+        sources, records, artifacts = self.unparsed_totals()
+        if not (sources or records):
+            return None
+        parts = []
+        if sources:
+            parts.append(f'{sources} source{"s" if sources != 1 else ""}')
+        if records:
+            parts.append(f'{records} record{"s" if records != 1 else ""}')
+        # The caller labels this row "Unparsed"; repeating the word here just pads it.
+        return (f'{", ".join(parts)} across '
+                f'{artifacts} artifact{"s" if artifacts != 1 else ""}')
 
     def artifact_status_summary(self):
         """Flatten per-profile statuses to {count_key: {status: [profile, ...]}}.
@@ -668,6 +764,19 @@ class AnalysisSession(object):
         statuses = self.artifact_status_summary().get(count_key)
         if not statuses:
             return None
+        # For a partial parse, the useful answer is what was lost, not the word
+        # "partial"; the counts are summed across the profiles that reported them.
+        if set(statuses) == {'partial'}:
+            sources = sum(r.unparsed_sources for results in self.artifact_results.values()
+                          for k, r in results.items() if k == count_key)
+            records = sum(r.unparsed_records for results in self.artifact_results.values()
+                          for k, r in results.items() if k == count_key)
+            parts = []
+            if sources:
+                parts.append(f'{sources} source{"s" if sources != 1 else ""}')
+            if records:
+                parts.append(f'{records} record{"s" if records != 1 else ""}')
+            return f'{", ".join(parts)} unparsed'
         total_profiles = len(self.profile_paths or []) or 1
         parts = []
         for status, profiles in sorted(statuses.items()):
@@ -959,11 +1068,7 @@ class AnalysisSession(object):
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.parsed_extension_data.extend(browser_analysis.parsed_extension_data)
                 self.parsed_sync_data.extend(browser_analysis.parsed_sync_data)
-                self.artifacts_counts = self.sum_dict_counts(self.artifacts_counts, browser_analysis.artifacts_counts)
-                self.record_artifact_status(found_profile_path, browser_analysis)
-                if self.artifacts_display is None:
-                    self.artifacts_display = {}
-                self.artifacts_display.update(browser_analysis.artifacts_display)
+                self.record_profile_results(found_profile_path, browser_analysis)
                 self.version.extend(browser_analysis.version)
                 self.display_version = browser_analysis.display_version
                 self.preferences.extend(browser_analysis.preferences)
@@ -1004,11 +1109,7 @@ class AnalysisSession(object):
                 browser_analysis.process()
                 self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
-                self.artifacts_counts = self.sum_dict_counts(self.artifacts_counts, browser_analysis.artifacts_counts)
-                self.record_artifact_status(found_profile_path, browser_analysis)
-                if self.artifacts_display is None:
-                    self.artifacts_display = {}
-                self.artifacts_display.update(browser_analysis.artifacts_display)
+                self.record_profile_results(found_profile_path, browser_analysis)
                 self.version.extend(browser_analysis.version)
                 self.display_version = browser_analysis.display_version
                 self.preferences.extend(browser_analysis.preferences)
@@ -1031,6 +1132,7 @@ class AnalysisSession(object):
 
         self.apply_originator_visit_sources()
         self.generate_display_version()
+        self.log_unparsed_summary()
         return True
 
     def apply_originator_visit_sources(self):
@@ -3069,12 +3171,20 @@ class AnalysisSession(object):
     def generate_jsonl(self, output_file):
         with open(output_file, mode='w') as jsonl:
             unparsed_count = 0
+            unparsed_types = collections.Counter()
 
             def write_jsonl_record(record):
                 nonlocal unparsed_count
                 record_json = json.dumps(record, cls=HindsightEncoder)
                 if record_json == 'null':
+                    # HindsightEncoder has no branch for this class, so the record is
+                    # dropped from the output entirely. Naming the class and row_type
+                    # makes that diagnosable -- a bare count hides which artifact is
+                    # missing, and "some records were skipped" reads as harmless.
                     unparsed_count += 1
+                    unparsed_types[
+                        f'{type(record).__module__.split(".")[-1]}.{type(record).__name__}'
+                        f' (row_type={getattr(record, "row_type", None)!r})'] += 1
                     return
                 jsonl.write(record_json)
                 jsonl.write('\n')
@@ -3130,4 +3240,9 @@ class AnalysisSession(object):
                 for extension in installed_extensions['data']:
                     write_jsonl_record(extension)
             if unparsed_count:
-                log.warning(f'Skipped {unparsed_count} unparsed JSONL record(s)')
+                log.error(
+                    f'{unparsed_count} record(s) could not be written to JSONL and are '
+                    f'MISSING from this output; HindsightEncoder has no branch for '
+                    f'their class:')
+                for name, count in unparsed_types.most_common():
+                    log.error(f'  - {count} x {name}')

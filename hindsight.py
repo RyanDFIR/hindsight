@@ -447,6 +447,10 @@ def main():
     output_table.add_row("Log path", os.path.abspath(analysis_session.log_path))
     output_table.add_row("Format", analysis_session.selected_output_format.upper())
     output_table.add_row("Total items", str(total_items))
+    unparsed_summary = analysis_session.describe_unparsed_totals()
+    if unparsed_summary:
+        # Surfaced next to the total so a partial run is never read as a complete one.
+        output_table.add_row("Unparsed", rich.text.Text(unparsed_summary, style="yellow"))
     output_table.add_row("Elapsed time", elapsed_str)
     output_table.add_row("Finish time", finish_time)
     console.print(rich.align.Align.center(output_table))

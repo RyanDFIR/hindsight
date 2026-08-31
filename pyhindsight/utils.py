@@ -40,11 +40,27 @@ def text_factory(row_data):
         return row_data
 
 
+def note_open_failure(browser, database_path, database_name, reason):
+    """Remember why a database could not be opened, for the caller to report.
+
+    The parser that asked for the database usually turns a failure into `return None`,
+    which reaches the driver as "this artifact could not be read" -- true, but with the
+    reason left behind in an unrelated log line. Stashing it here lets the artifact's own
+    summary line name the file and the reason, so the log can be read top-down.
+    """
+    try:
+        browser.last_open_failure = (
+            os.path.join(database_path, database_name), str(reason))
+    except AttributeError:
+        pass
+
+
 def open_sqlite_db(chrome, database_path, database_name):
     log.info(f' - Reading from {database_name} in {database_path}')
 
     if not os.path.exists(os.path.join(database_path, database_name)):
         log.info(f'   - Failed; {database_name} does not exist in {database_path}')
+        note_open_failure(chrome, database_path, database_name, 'file does not exist')
         return False
 
     if chrome.no_copy:
@@ -63,6 +79,7 @@ def open_sqlite_db(chrome, database_path, database_name):
                     shutil.copyfile(src, db_path_to_open + suffix)
         except Exception as e:
             log.error(f' - Error copying {database_name}: {e}')
+            note_open_failure(chrome, database_path, database_name, f'could not be copied ({e})')
             return None
 
     db_conn = None
@@ -79,6 +96,7 @@ def open_sqlite_db(chrome, database_path, database_name):
 
     except Exception as e:
         log.error(f' - Error opening {database_name}: {e}')
+        note_open_failure(chrome, database_path, database_name, str(e))
         if db_conn is not None:
             db_conn.close()
         return None
