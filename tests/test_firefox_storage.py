@@ -12,8 +12,6 @@ FIXTURE_DIR = os.path.join('tests', 'fixtures', 'firefox')
 def _make_firefox():
     ff = Firefox(FIXTURE_DIR, no_copy=True, temp_dir=None,
                  timezone=datetime.timezone.utc)
-    ff.artifacts_counts = {}
-    ff.artifacts_display = {}
     ff.parsed_artifacts = []
     ff.parsed_storage = []
     ff.preferences = []
@@ -195,10 +193,13 @@ class TestIDBKeyDecoder(unittest.TestCase):
 class TestLocalStorage(unittest.TestCase):
     def test_walk_fixture_storage_directory(self):
         ff = _make_firefox()
-        ff.get_local_storage(FIXTURE_DIR)
+        reported = ff.get_local_storage(FIXTURE_DIR)
 
         # One origin, two key/value pairs (one raw, one snappy-compressed).
-        self.assertEqual(ff.artifacts_counts.get('Local Storage'), 2)
+        # get_local_storage reports partial failures, so it returns a ParseResult;
+        # the count is the first field.
+        self.assertEqual(reported.count, 2)
+        self.assertFalse(reported.is_partial)
         self.assertEqual(len(ff.parsed_storage), 2)
 
         by_key = {item.key: item for item in ff.parsed_storage}

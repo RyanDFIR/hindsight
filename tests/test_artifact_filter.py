@@ -197,31 +197,24 @@ class TestParserCallSitesAreTagged(unittest.TestCase):
     def test_every_driver_run_call_is_tagged(self):
         # An untagged call site parses unconditionally, so --only/--skip would quietly
         # have no effect on it. Catch that here rather than in an investigation.
+        # Parsed rather than grepped: the source also *mentions* driver.run() in prose.
+        import ast
         import inspect
-        import re
         from pyhindsight.browsers import chrome, firefox
         for module in (chrome, firefox):
-            path = inspect.getfile(module)
-            with open(path, encoding='utf-8') as source:
-                text = source.read()
-            call_count = len(re.findall(r'driver\.run\(', text))
-            tagged_count = len(re.findall(r'\n\s*artifact=', text))
-            self.assertEqual(
-                call_count, tagged_count,
-                f'{path}: {call_count} driver.run() calls but {tagged_count} artifact= tags')
-
-
-class _FakeBrowser:
-    """Minimal stand-in for the browser state ProcessingDisplay reads."""
-
-    def __init__(self, artifact_filter_):
-        self.artifact_filter = artifact_filter_
-        self.artifacts_counts = {}
-        self.artifacts_display = {}
-        self.artifacts_status = {}
-        self.profile_path = 'fixture-profile'
-        self.browser_name = 'Chrome'
-        self.display_version = '999'
+            source = inspect.getsource(module)
+            untagged = []
+            for node in ast.walk(ast.parse(source)):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == 'run'
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == 'driver'):
+                    continue
+                if not any(kw.arg == 'artifact' for kw in node.keywords):
+                    untagged.append(f'{module.__name__} line {node.lineno}')
+            self.assertEqual([], untagged,
+                             f'untagged driver.run() calls: {untagged}')
 
 
 class TestProcessingDisplayHonorsFilter(unittest.TestCase):
@@ -230,20 +223,32 @@ class TestProcessingDisplayHonorsFilter(unittest.TestCase):
     def _driver(self, artifact_filter_):
         import io
         import rich.console
-        from pyhindsight.browsers.webbrowser import ProcessingDisplay
+        from pyhindsight.browsers.webbrowser import ProcessingDisplay, WebBrowser
 
-        driver = ProcessingDisplay(_FakeBrowser(artifact_filter_), ['Group'])
+        browser = WebBrowser('fixture-profile', 'Chrome', artifact_filter=artifact_filter_)
+        browser.display_version = '999'
+        driver = ProcessingDisplay(browser, ['Group'])
         # Render into a buffer so the test doesn't paint the terminal.
         driver.console = rich.console.Console(file=io.StringIO(), width=100)
         return driver
+
+    @staticmethod
+    def _parser(browser, count=None, calls=None, name=None):
+        """A stand-in parser: returns a count, or None to mean "could not read"."""
+        def run():
+            if calls is not None:
+                calls.append(name)
+            return count
+        return run
 
     def test_excluded_parser_is_not_called(self):
         calls = []
         driver = self._driver(ArtifactFilter.from_selectors(skip_tokens=['cache']))
         with driver:
             driver.group('Group')
-            driver.run('Cache', 'Cache', lambda: calls.append('cache'),
-                       display_key='Cache', display_value='Cache records', artifact='cache')
+            driver.run('Cache', 'Cache',
+                       self._parser(driver.browser, 5, calls, 'cache'),
+                       display_value='Cache records', artifact='cache')
         self.assertEqual([], calls)
 
     def test_included_parser_is_called(self):
@@ -251,48 +256,60 @@ class TestProcessingDisplayHonorsFilter(unittest.TestCase):
         driver = self._driver(ArtifactFilter.from_selectors(skip_tokens=['cache']))
         with driver:
             driver.group('Group')
-            driver.run('URL', 'History', lambda: calls.append('history'),
-                       display_key='History', display_value='URL records', artifact='history')
+            driver.run('URL', 'History',
+                       self._parser(driver.browser, 3, calls, 'history'),
+                       display_value='URL records', artifact='history')
         self.assertEqual(['history'], calls)
+        self.assertEqual({'History': 3}, driver.browser.artifacts_counts)
 
-    def test_excluded_artifact_writes_no_count(self):
-        # Absent from artifacts_counts means "not parsed", which has to stay
-        # distinguishable from a parsed artifact that found nothing (a count of 0).
+    def test_excluded_artifact_is_recorded_as_skipped_not_as_zero(self):
+        # A count of 0 would read as "parsed fine, found nothing"; the artifact was
+        # never parsed at all.
         driver = self._driver(ArtifactFilter.from_selectors(skip_tokens=['cache']))
         with driver:
             driver.group('Group')
-            driver.run('Cache', 'Cache', lambda: None,
-                       display_key='Cache', display_value='Cache records', artifact='cache')
+            driver.run('Cache', 'Cache', self._parser(driver.browser, 5),
+                       display_value='Cache records', artifact='cache')
         self.assertNotIn('Cache', driver.browser.artifacts_counts)
+        self.assertEqual({'Cache': 'skipped'}, driver.browser.artifacts_status)
 
-    def test_excluded_artifact_writes_no_display_label(self):
-        # Consumers iterate artifacts_display and default a missing count to 0
-        # (parsed_artifacts.tpl), so recording the label without a count would render
-        # a skipped artifact as "0" instead of leaving it out.
+    def test_excluded_artifact_keeps_its_label(self):
+        # One record per artifact: the label rides along with the status, so output can
+        # name what it skipped instead of dropping the row.
         driver = self._driver(ArtifactFilter.from_selectors(skip_tokens=['cache']))
         with driver:
             driver.group('Group')
-            driver.run('Cache', 'Cache', lambda: None,
-                       display_key='Cache', display_value='Cache records', artifact='cache')
-        self.assertNotIn('Cache', driver.browser.artifacts_display)
-
-    def test_excluded_artifact_still_shows_its_label_on_screen(self):
-        # Dropping the artifacts_display write must not blank the row in the live UI.
-        driver = self._driver(ArtifactFilter.from_selectors(skip_tokens=['cache']))
-        with driver:
-            driver.group('Group')
-            driver.run('Cache', 'Cache', lambda: None,
-                       display_key='Cache', display_value='Cache records', artifact='cache')
-        label, _ = driver.output_groups['Group'][0]
+            driver.run('Cache', 'Cache', self._parser(driver.browser, 5),
+                       display_value='Cache records', artifact='cache')
+        self.assertEqual({'Cache': 'Cache records'}, driver.browser.artifacts_display)
+        label = driver.output_groups['Group'][0][0]
         self.assertEqual('Cache records', label)
+
+    def test_a_failing_parser_is_recorded_as_failed(self):
+        driver = self._driver(ArtifactFilter())
+        with driver:
+            driver.group('Group')
+            driver.run('Cookies', 'Cookies', self._parser(driver.browser, None),
+                       display_value='Cookie records', artifact='cookies')
+        self.assertNotIn('Cookies', driver.browser.artifacts_counts)
+        self.assertEqual({'Cookies': 'failed'}, driver.browser.artifacts_status)
+
+    def test_a_zero_count_is_not_a_failure(self):
+        driver = self._driver(ArtifactFilter())
+        with driver:
+            driver.group('Group')
+            driver.run('IndexedDB', 'IndexedDB', self._parser(driver.browser, 0),
+                       display_value='IndexedDB records', artifact='indexeddb')
+        self.assertEqual({'IndexedDB': 0}, driver.browser.artifacts_counts)
+        self.assertEqual({}, driver.browser.artifacts_status)
 
     def test_excluded_artifact_is_recorded_on_the_filter(self):
         artifact_filter_ = ArtifactFilter.from_selectors(skip_tokens=['cache'])
         driver = self._driver(artifact_filter_)
         with driver:
             driver.group('Group')
-            driver.run('Cache', 'Cache', lambda: None,
-                       display_key='Cache', display_value='Cache records', artifact='cache')
+            driver.run('Cache', 'Cache', self._parser(driver.browser, 5),
+                       display_value='Cache records', artifact='cache')
         self.assertEqual({'cache'}, artifact_filter_.skipped_artifacts)
 
     def test_untagged_call_runs_under_an_only_filter(self):
@@ -300,8 +317,22 @@ class TestProcessingDisplayHonorsFilter(unittest.TestCase):
         driver = self._driver(ArtifactFilter.from_selectors(only_tokens=['history']))
         with driver:
             driver.group('Group')
-            driver.run('Mystery', 'Mystery', lambda: calls.append('mystery'))
+            driver.run('Mystery', 'Mystery',
+                       self._parser(driver.browser, 1, calls, 'mystery'))
         self.assertEqual(['mystery'], calls)
+
+    def test_a_parser_that_returns_nothing_is_recorded_as_failed(self):
+        # Returning None is the failure signal, so a parser that falls off the end is
+        # reported as a failure rather than silently inheriting anything.
+        driver = self._driver(ArtifactFilter())
+        with driver:
+            driver.group('Group')
+            driver.run('History', 'History', self._parser(driver.browser, 7),
+                       display_value='URL records', artifact='history')
+            driver.run('Quiet', 'Quiet', lambda: None, display_value='Quiet records')
+        self.assertEqual({'History': 7}, driver.browser.artifacts_counts)
+        self.assertNotIn('Quiet', driver.browser.artifacts_counts)
+        self.assertEqual('failed', driver.browser.artifacts_status['Quiet'])
 
 
 if __name__ == '__main__':

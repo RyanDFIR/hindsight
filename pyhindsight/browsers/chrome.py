@@ -17,7 +17,8 @@ import puremagic
 import base64
 import ccl_chromium_reader
 
-from pyhindsight.browsers.webbrowser import WebBrowser, timeline_sort_key
+from pyhindsight.browsers.webbrowser import (
+    ParseFailures, WebBrowser, timeline_sort_key)
 from pyhindsight import utils
 
 # Try to import optional modules - do nothing on failure, as status is tracked elsewhere
@@ -298,14 +299,12 @@ class Chrome(WebBrowser):
         self.version = possible_versions
 
     @contextmanager
-    def _execute_compatible_query(self, path, database, query, version, artifact_name, count_key=None):
+    def _execute_compatible_query(self, path, database, query, version, artifact_name):
         """Open *database*, find the highest compatible query version, execute it with schema fallback, yield cursor.
 
         Yields None (and logs) on any failure so callers can do ``if cursor is None: return``.
         The DB connection is always closed on exit.
         """
-        if count_key is None:
-            count_key = database
 
         compatible_version = version[0]
         while compatible_version not in query and compatible_version > 0:
@@ -320,7 +319,6 @@ class Chrome(WebBrowser):
 
         conn = utils.open_sqlite_db(self, path, database)
         if not conn:
-            self.artifacts_counts[count_key] = 'Failed'
             yield None
             return
 
@@ -338,7 +336,6 @@ class Chrome(WebBrowser):
                     log.warning(f' - Query for {artifact_name} v{attempt_version} failed ({e}); trying lower version')
             else:
                 log.error(f' - No compatible query found for {artifact_name}; skipping')
-                self.artifacts_counts[count_key] = 'Failed'
                 yield None
                 return
             yield cursor
@@ -425,7 +422,7 @@ class Chrome(WebBrowser):
         source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'History items') as cursor:
             if cursor is None:
-                return
+                return None
 
             for row in cursor:
                 duration = None
@@ -487,9 +484,8 @@ class Chrome(WebBrowser):
                 new_row.source_item = source_item
                 results.append(new_row)
 
-        self.artifacts_counts[history_file] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     def get_media_history(self, path, history_file, version, row_type):
         results = []
@@ -506,7 +502,7 @@ class Chrome(WebBrowser):
         source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'Media History items') as cursor:
             if cursor is None:
-                return
+                return None
 
             for row in cursor:
                 duration = None
@@ -536,9 +532,8 @@ class Chrome(WebBrowser):
                 new_row.source_item = source_item
                 results.append(new_row)
 
-        self.artifacts_counts[history_file] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     @staticmethod
     def _download_interpretation(item):
@@ -576,6 +571,7 @@ class Chrome(WebBrowser):
     def get_downloads(self, path, database, version, row_type):
         # Set up empty return array
         results = []
+        unparsed = ParseFailures('Downloads')
 
         log.info(f'Download items from {database}:')
 
@@ -636,10 +632,9 @@ class Chrome(WebBrowser):
 
         source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
-                path, database, query, version, 'Download items',
-                count_key=database + '_downloads') as cursor:
+                path, database, query, version, 'Download items') as cursor:
             if cursor is None:
-                return
+                return None
 
             # The downloads_url_chains join returns one row per redirect hop; collapse to one
             # entry per download, collecting the full URL chain (final hop = download URL).
@@ -677,7 +672,7 @@ class Chrome(WebBrowser):
                         by_ext_name=row.get('by_ext_name'), by_web_app_id=row.get('by_web_app_id'),
                         url_chain=ordered_chain if len(ordered_chain) > 1 else None)
                 except Exception:
-                    log.exception(' - Exception processing record; skipped.')
+                    unparsed.record('download record', 'exception while processing')
                     continue
 
                 new_row.decode_interrupt_reason()
@@ -710,9 +705,8 @@ class Chrome(WebBrowser):
                     opened_row.row_type = f'{row_type} (opened)'
                     results.append(opened_row)
 
-        self.artifacts_counts[database + '_downloads'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return unparsed.result(len(results))
 
     def get_shared_proto_db_downloads(self, path, dir_name):
         # Downloads persisted by Chrome's in-progress DownloadDB in the shared_proto_db
@@ -732,6 +726,7 @@ class Chrome(WebBrowser):
         }
 
         results = []
+        unparsed = ParseFailures('shared_proto_db downloads')
         ldb_path = os.path.join(path, dir_name)
         log.info('Downloads (shared_proto_db):')
         log.info(f' - Reading from {ldb_path}')
@@ -739,8 +734,7 @@ class Chrome(WebBrowser):
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
-            self.artifacts_counts['shared_proto_db downloads'] = 'Failed'
-            return
+            return None
 
         def decode_string16_pickle(raw):
             # target_path/current_path are serialized base::Pickle string16 blobs:
@@ -757,8 +751,7 @@ class Chrome(WebBrowser):
             ldb_records = ccl_chromium_reader.storage_formats.ccl_leveldb.RawLevelDb(pathlib.Path(ldb_path))
         except ValueError as e:
             log.warning(f' - Error reading records ({e}); possible LevelDB corruption')
-            self.artifacts_counts['shared_proto_db downloads'] = 'Failed'
-            return
+            return None
 
         # Keep the latest (highest-seq) Live record per download guid; the in-progress DB
         # rewrites a download's entry as it progresses, so earlier records are partial
@@ -772,7 +765,7 @@ class Chrome(WebBrowser):
             try:
                 entry = DownloadDBEntry.FromString(record.value)
             except Exception as e:
-                log.debug(f' - Could not decode a shared_proto_db download record: {e}')
+                unparsed.record('shared_proto_db download', f'could not decode ({e})')
                 continue
             guid = entry.download_info.guid
             if guid not in latest_by_guid or record.seq > latest_by_guid[guid][0]:
@@ -829,7 +822,7 @@ class Chrome(WebBrowser):
                     fetched_via_service_worker=ip.fetched_via_service_worker or None,
                     storage_partition=storage_partition)
             except Exception:
-                log.exception(' - Exception processing shared_proto_db download; skipped.')
+                unparsed.record('shared_proto_db download', 'exception while processing')
                 continue
 
             new_row.decode_interrupt_reason()
@@ -845,9 +838,8 @@ class Chrome(WebBrowser):
             new_row.source_item = source_item
             results.append(new_row)
 
-        self.artifacts_counts['shared_proto_db downloads'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return unparsed.result(len(results))
 
     def decrypt_cookie(self, encrypted_value):
         """Decryption based on work by Nathan Henrie and Jordan Wright as well as Chromium source:
@@ -953,7 +945,7 @@ class Chrome(WebBrowser):
         source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Cookie items') as cursor:
             if cursor is None:
-                return
+                return None
 
             for row in cursor:
                 if row.get('encrypted_value') is not None:
@@ -1006,9 +998,8 @@ class Chrome(WebBrowser):
                     updated_row.timestamp = updated_row.last_update_utc
                     results.append(updated_row)
 
-        self.artifacts_counts[database] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     def get_login_data(self, path, database, version):
         # Set up empty return array
@@ -1028,7 +1019,7 @@ class Chrome(WebBrowser):
         source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Login items') as cursor:
             if cursor is None:
-                return
+                return None
 
             for row in cursor:
                 if row.get('blacklisted_by_user') == 1:
@@ -1103,9 +1094,8 @@ class Chrome(WebBrowser):
                     stats_row.source_item = source_item
                     results.append(stats_row)
 
-        self.artifacts_counts['Login Data'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     def get_autofill(self, path, database, version):
         # Set up empty return array
@@ -1121,9 +1111,9 @@ class Chrome(WebBrowser):
 
         source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
-                path, database, query, version, 'Autofill items', count_key='Autofill') as cursor:
+                path, database, query, version, 'Autofill items') as cursor:
             if cursor is None:
-                return
+                return None
 
             for row in cursor:
                 autofill_value = row.get('value')
@@ -1143,9 +1133,8 @@ class Chrome(WebBrowser):
                     last_used_item.source_item = source_item
                     results.append(last_used_item)
 
-        self.artifacts_counts['Autofill'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     def get_dips(self, path, database, version):
         # Set up empty return array
@@ -1181,9 +1170,9 @@ class Chrome(WebBrowser):
 
         source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
-                path, database, query, version, 'DIPS items', count_key='DIPS') as cursor:
+                path, database, query, version, 'DIPS items') as cursor:
             if cursor is None:
-                return
+                return None
 
             for row in cursor:
                 for column in columns:
@@ -1197,9 +1186,8 @@ class Chrome(WebBrowser):
                     dips_record.source_item = source_item
                     results.append(dips_record)
 
-        self.artifacts_counts['DIPS'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     def get_dips_popups(self, path, database, version):
         # Set up empty return array
@@ -1214,9 +1202,9 @@ class Chrome(WebBrowser):
         source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
 
         with self._execute_compatible_query(
-                path, database, query, version, 'DIPS Popup items', count_key='DIPS Popups') as cursor:
+                path, database, query, version, 'DIPS Popup items') as cursor:
             if cursor is None:
-                return
+                return None
 
             for row in cursor:
                 if row.get('is_authentication_interaction'):
@@ -1232,9 +1220,8 @@ class Chrome(WebBrowser):
                 dips_popup_record.source_item = source_item
                 results.append(dips_popup_record)
 
-        self.artifacts_counts['DIPS Popups'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     def get_bookmarks(self, path, file, version):
         # Set up empty return array
@@ -1281,17 +1268,16 @@ class Chrome(WebBrowser):
                         process_bookmark_children(decoded_json['roots'][top_level_folder]['name'],
                                                   decoded_json['roots'][top_level_folder]['children'])
 
-            self.artifacts_counts['Bookmarks'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
 
         except:
             log.error(f' - Error parsing "{bookmarks_path}"')
-            self.artifacts_counts['Bookmarks'] = 'Failed'
-            return
+            return None
 
     def get_local_storage(self, path, dir_name):
         results = []
+        unparsed = ParseFailures('Local Storage')
 
         # Grab file list of 'Local Storage' directory
         ls_path = os.path.join(path, dir_name)
@@ -1300,11 +1286,14 @@ class Chrome(WebBrowser):
 
         if not os.path.isdir(ls_path):
             log.error(f' - {ls_path} is not a directory')
-            self.artifacts_counts['Local Storage'] = 'Failed'
-            return
+            return None
 
         local_storage_listing = os.listdir(ls_path)
         log.debug(f' - {len(local_storage_listing)} files in Local Storage directory')
+        # Legacy per-origin .localstorage SQLite files only; the modern leveldb
+        # directory is counted separately below. Conflating the two reported
+        # "N items from 0 files" on every modern profile, because everything had
+        # come from leveldb and nothing had come from a legacy file.
         filtered_listing = []
 
         # Chrome v61+ used leveldb for LocalStorage, but kept old SQLite .localstorage files if upgraded.
@@ -1320,6 +1309,10 @@ class Chrome(WebBrowser):
                         self.profile_path, ls_item['origin'], ls_item['key'], ls_item['value'],
                         ls_item['seq'], ls_item['state'], str(ls_item['origin_file'])))
 
+        # Everything gathered so far came from the leveldb directory; anything added
+        # after this point came from a legacy .localstorage file.
+        leveldb_item_count = len(results)
+
         # Chrome v60 and earlier used a SQLite file (with a .localstorage file ext) for each origin
         for ls_file in local_storage_listing:
             if ls_file.startswith(('ftp', 'http', 'file', 'chrome-extension')) and ls_file.endswith('.localstorage'):
@@ -1332,6 +1325,7 @@ class Chrome(WebBrowser):
                     # Copy and connect to copy of the Local Storage SQLite DB
                     conn = utils.open_sqlite_db(self, ls_path, ls_file)
                     if not conn:
+                        unparsed.source(ls_file_path, self.describe_open_failure())
                         continue
                     cursor = conn.cursor()
 
@@ -1349,14 +1343,33 @@ class Chrome(WebBrowser):
                             source_path=os.path.join(ls_path, ls_file)))
 
                 except Exception as e:
-                    log.warning(f' - Error reading key/values from {ls_file_path}: {e}')
+                    unparsed.source(ls_file_path, f'key/values unreadable ({e})')
                 finally:
                     if conn is not None:
                         conn.close()
 
-        self.artifacts_counts['Local Storage'] = len(results)
-        log.info(f' - Parsed {len(results)} items from {len(filtered_listing)} files')
+        # Name where the records actually came from. A modern profile has only the
+        # leveldb directory, an upgraded one can have both, and saying "from N files"
+        # for either was wrong or meaningless.
+        legacy_item_count = len(results) - leveldb_item_count
+        has_leveldb = 'leveldb' in local_storage_listing
+        # The driver logs the total, so only say what that doesn't already cover: which
+        # of the two storage generations the records came from, when that is not the
+        # ordinary "everything came from leveldb".
+        if has_leveldb and filtered_listing:
+            plural = 's' if len(filtered_listing) != 1 else ''
+            log.info(f' - {leveldb_item_count} item(s) from the leveldb directory and '
+                     f'{legacy_item_count} from {len(filtered_listing)} legacy '
+                     f'.localstorage file{plural}')
+        elif filtered_listing:
+            plural = 's' if len(filtered_listing) != 1 else ''
+            log.info(f' - All items came from {len(filtered_listing)} legacy '
+                     f'.localstorage file{plural} (no leveldb directory)')
+        elif not has_leveldb:
+            log.info(' - No leveldb directory or legacy .localstorage files found')
+
         self.parsed_storage.extend(results)
+        return unparsed.result(len(results))
 
     # A SNSS LastActiveTime below this is base::TimeTicks, not a wall-clock time.
     # Chrome originally wrote this field as base::TimeTicks -- microseconds from an
@@ -1391,6 +1404,7 @@ class Chrome(WebBrowser):
 
     def get_sessions(self, path, dir_name):
         results = []
+        unparsed = ParseFailures('Sessions')
 
         from ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
         from ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
@@ -1402,8 +1416,7 @@ class Chrome(WebBrowser):
 
         if not os.path.isdir(sessions_path):
             log.error(f' - {sessions_path} is not a directory')
-            self.artifacts_counts['Sessions'] = 'Failed'
-            return
+            return None
 
         # Session file command IDs (SessionRestoreIdType)
         SESSION_TAB_CLOSED = 16
@@ -1435,10 +1448,16 @@ class Chrome(WebBrowser):
                     while True:
                         length_raw = f.read(2)
                         if not length_raw or len(length_raw) < 2:
+                            if length_raw:
+                                unparsed.source(filename, 'truncated: incomplete command '
+                                                        'length at end of file')
                             break
                         length = struct.unpack('<H', length_raw)[0]
                         data = f.read(length)
                         if len(data) < length:
+                            unparsed.source(filename, f'truncated: command needs {length} '
+                                                    f'bytes, {len(data)} available; '
+                                                    f'remaining commands not read')
                             break
                         cmd_id = data[0]
                         p = data[1:]
@@ -1531,7 +1550,7 @@ class Chrome(WebBrowser):
                                 pass
 
             except Exception as e:
-                log.debug(f' - Error reading structural commands from {filename}: {e}')
+                unparsed.source(filename, f'structural commands unreadable ({e})')
 
         log.info(f' - Session structure: {len(session_windows)} windows, {len(session_tabs)} tabs, '
                  f'{len(session_tab_groups)} tab groups')
@@ -1563,12 +1582,13 @@ class Chrome(WebBrowser):
                 parts.append(f'Extension: {tab["extension_app_id"]}')
 
             if tab.get('user_agent_override'):
-                parts.append(f'UA Override: {tab["user_agent_override"][:50]}')
+                parts.append(f'UA Override: {tab["user_agent_override"]}')
 
             return parts
 
         # Track exact duplicates across all session files; key is all meaningful content fields
         seen_nav_entries = set()
+        duplicate_nav_entries = 0
 
         for filename in sorted(os.listdir(sessions_path)):
             if filename.startswith('Session_'):
@@ -1626,11 +1646,15 @@ class Chrome(WebBrowser):
                                     tf = parsed_ps.top_frame
                                     if tf.form_elements:
                                         form_items = []
-                                        for fe in tf.form_elements[:10]:
+                                        for fe in tf.form_elements:
                                             if not fe.values or not any(v.strip() for v in fe.values):
                                                 continue  # skip fields with no meaningful values
                                             label = fe.name or '(unnamed)'
-                                            form_items.append(f'{label} [{fe.type}]: {fe.values[0][:50]}')
+                                            # Every value of every element, in full: a
+                                            # multi-value field (multi-select, repeated
+                                            # input) previously reported only its first.
+                                            values = ', '.join(v for v in fe.values if v.strip())
+                                            form_items.append(f'{label} [{fe.type}]: {values}')
                                         if form_items:
                                             value_parts.append(f'Form Data: {"; ".join(form_items)}')
                                     if tf.http_body and tf.http_body.elements:
@@ -1695,13 +1719,17 @@ class Chrome(WebBrowser):
                             command.has_post_data,
                         )
                         if dedup_key in seen_nav_entries:
+                            # The same navigation entry appears in more than one SNSS
+                            # command, so collapsing is correct -- but how many rows were
+                            # collapsed has to be visible, the way Firefox reports it.
+                            duplicate_nav_entries += 1
                             continue
                         seen_nav_entries.add(dedup_key)
 
                         results.append(item)
 
             except Exception as e:
-                log.warning(f' - Error reading {filename} (NavigationEntry pass): {e}')
+                unparsed.source(filename, f'NavigationEntry pass failed ({e})')
 
             # Pass 2: Read raw SNSS commands for timestamped events CCL doesn't parse
             try:
@@ -1710,10 +1738,16 @@ class Chrome(WebBrowser):
                     while True:
                         length_raw = f.read(2)
                         if not length_raw or len(length_raw) < 2:
+                            if length_raw:
+                                unparsed.source(filename, 'truncated: incomplete command '
+                                                        'length at end of file')
                             break
                         length = struct.unpack('<H', length_raw)[0]
                         data = f.read(length)
                         if len(data) < length:
+                            unparsed.source(filename, f'truncated: command needs {length} '
+                                                    f'bytes, {len(data)} available; '
+                                                    f'remaining commands not read')
                             break
 
                         cmd_id = data[0]
@@ -1830,7 +1864,7 @@ class Chrome(WebBrowser):
                                     log.debug(f' - Error parsing Window command in {filename}: {e}')
 
             except Exception as e:
-                log.warning(f' - Error reading {filename} (raw command pass): {e}')
+                unparsed.source(filename, f'raw command pass failed ({e})')
 
         # Build tab navigation stacks from NavigationEntry results
         # tab_nav_stacks: tab_id -> {nav_index: (url, title, timestamp)} (latest entry per index)
@@ -1866,9 +1900,15 @@ class Chrome(WebBrowser):
             'tab_nav_stacks': tab_nav_stacks,
         }
 
-        log.info(f' - Parsed {len(results)} Session items')
-        self.artifacts_counts['Sessions'] = len(results)
+        # Collapsed duplicates are reported, not just silently dropped: without the
+        # number there is no way to tell a session with few navigations from one whose
+        # rows were mostly merged. (Firefox's sessionstore parser reports the same way.)
+        if duplicate_nav_entries:
+            log.info(f' - Collapsed {duplicate_nav_entries} duplicate navigation '
+                     f'entr{"ies" if duplicate_nav_entries != 1 else "y"} '
+                     f'(same URL, title, timestamp, tab and index)')
         self.parsed_artifacts.extend(results)
+        return unparsed.result(len(results))
 
     def get_session_storage(self, path, dir_name):
         results = []
@@ -1881,8 +1921,7 @@ class Chrome(WebBrowser):
 
         if not os.path.isdir(ss_path):
             log.error(f' - {ss_path} is not a directory')
-            self.artifacts_counts['Session Storage'] = 'Failed'
-            return
+            return None
 
         session_storage_listing = os.listdir(ss_path)
         log.debug(f' - {len(session_storage_listing)} files in Session Storage directory')
@@ -1903,7 +1942,7 @@ class Chrome(WebBrowser):
             # The reader raises a range of errors on corrupt/truncated LevelDB data;
             # a single bad Session Storage shouldn't abort a multi-profile analysis.
             log.warning(f' - Error reading records ({e!r}); possible LevelDB corruption')
-            self.artifacts_counts['Session Storage'] = 'Failed'
+            return None
 
         if ss_ldb_records:
             for origin in ss_ldb_records.iter_hosts():
@@ -1929,10 +1968,9 @@ class Chrome(WebBrowser):
                     value.leveldb_sequence_number, state=record_state, source_path=ss_path))
 
             ss_ldb_records.close()
-            self.artifacts_counts['Session Storage'] = len(results)
 
-        log.info(f' - Parsed {len(results)} Session Storage items')
         self.parsed_storage.extend(results)
+        return len(results)
 
     @staticmethod
     def resolve_indexeddb_blob_refs(record, origin):
@@ -1970,6 +2008,7 @@ class Chrome(WebBrowser):
 
     def get_indexeddb(self, path, dir_name):
         results = []
+        unparsed = ParseFailures('IndexedDB')
 
         # Grab file list of 'IndexedDB' directory
         idb_path = os.path.join(path, dir_name)
@@ -1979,18 +2018,23 @@ class Chrome(WebBrowser):
 
         if not os.path.isdir(idb_path):
             log.error(f' - {idb_path} is not a directory')
-            self.artifacts_counts['IndexedDB'] = 'Failed'
-            return
+            return None
 
         idb_storage_listing = os.listdir(idb_path)
         log.debug(f' - {len(idb_storage_listing)} files in IndexedDB directory')
 
+        leveldb_dirs_read = 0
         for storage_directory in idb_storage_listing:
             if not storage_directory.endswith('.leveldb'):
                 continue
+            leveldb_dirs_read += 1
 
-            # The Ghostery extension has 1M+ records in it; skip for now.
+            # The Ghostery extension has 1M+ records in it; skip for now. Recorded
+            # as an unparsed source rather than skipped silently -- an examiner needs to
+            # know this origin was never read, not infer it from its absence.
             if storage_directory == 'chrome-extension_mlomiejdfkolichcflejclcbmpeaniij_0.indexeddb.leveldb':
+                unparsed.source(storage_directory,
+                              'skipped by hard-coded rule (very large store)')
                 continue
 
             origin = storage_directory.split('.indexeddb')[0]
@@ -2029,33 +2073,40 @@ class Chrome(WebBrowser):
                                     int(record.ldb_seq_no), database=f"{record.database_name}.{obj_store_name}",
                                     state=record_state, source_path=record_source_path))
                         except FileNotFoundError as e:
-                            log.error(f' - File ({e}) not found while processing {database}')
+                            unparsed.source(database, f'file not found ({e})')
 
                         except ValueError as e:
-                            log.error(f' - ValueError ({e}) when processing {database}')
+                            unparsed.source(database, f'ValueError ({e})')
 
                         except Exception as e:
                             # This aborts the rest of this object store's records, so name
                             # what was being read and how far it got -- otherwise there is
                             # no way to tell which data is missing from the output.
-                            log.error(f' - Unexpected Exception ({e}) when processing '
-                                      f'{database}.{obj_store_name}; '
-                                      f'{len(results)} records parsed before the failure')
+                            unparsed.source(
+                                f'{database}.{obj_store_name}',
+                                f'unexpected exception ({e}); {len(results)} records '
+                                f'parsed before the failure')
             except ValueError as e:
-                log.error(f' - {e} when processing {storage_directory}')
+                unparsed.source(storage_directory, str(e))
                 continue
 
             except Exception as e:
-                log.error(f' - Unexpected Exception ({e}) when processing {storage_directory}')
+                unparsed.source(storage_directory, f'unexpected exception ({e})')
                 continue
 
             finally:
                 if origin_idb is not None:
                     origin_idb.close()
 
-        self.artifacts_counts['IndexedDB'] = len(results)
-        log.info(f' - Parsed {len(results)} items from {len(idb_storage_listing)} files')
+        # Again, the driver logs the total; this says how many databases it came from,
+        # and only mentions the directory listing when it held entries that were not
+        # databases (blob directories, strays) so the two numbers differing is explained.
+        plural = 'ies' if leveldb_dirs_read != 1 else 'y'
+        skipped = len(idb_storage_listing) - leveldb_dirs_read
+        detail = f'; {skipped} non-database entr{"ies" if skipped != 1 else "y"} skipped'             if skipped else ''
+        log.info(f' - Read {leveldb_dirs_read} IndexedDB director{plural}{detail}')
         self.parsed_storage.extend(results)
+        return unparsed.result(len(results))
 
     @staticmethod
     def load_extension_manifest(extension_path):
@@ -2065,8 +2116,20 @@ class Chrome(WebBrowser):
         ext_version_listing = list(pathlib.Path(extension_path).glob("*.*_*"))
 
         # Connect to manifest.json in the latest version directory
-        # The version could be missing leading zeros in the string, so this sort accounts for that.
-        for version in sorted(ext_version_listing, reverse=True, key=lambda x: [int(part) for part in x.name.split('.')]):
+        # The version could be missing leading zeros in the string, so this sort accounts
+        # for that. Non-numeric components sort last rather than raising: one oddly-named
+        # directory used to abort the whole Extensions parse.
+        def version_sort_key(version_dir):
+            parts = []
+            for part in version_dir.name.split('.'):
+                # The sort is reverse=True (newest first), so a non-numeric component
+                # ranks *below* every numeric one to land last: a malformed directory
+                # should never be preferred over a real version, and must not crash the
+                # comparison the way int(part) did.
+                parts.append((1, int(part), '') if part.isdigit() else (0, 0, part))
+            return parts
+
+        for version in sorted(ext_version_listing, reverse=True, key=version_sort_key):
             manifest_path = version / 'manifest.json'
             try:
                 with open(manifest_path, encoding='utf-8', errors='replace') as f:
@@ -2102,10 +2165,10 @@ class Chrome(WebBrowser):
         log.info(f' - Reading from {extension_directory_path}')
         if not extension_directory_path.is_dir():
             log.error(f' - {extension_directory_path} is not a directory')
-            self.artifacts_counts['Extensions'] = 'Failed'
-            return
+            return None
 
         ext_listing = os.listdir(extension_directory_path)
+        unparsed = ParseFailures('Extensions')
         log.debug(f' - {len(ext_listing)} files in Extensions directory: {str(ext_listing)}')
 
         # Only process directories with the expected naming convention
@@ -2119,6 +2182,9 @@ class Chrome(WebBrowser):
             manifest, extension_version = self.load_extension_manifest(extension_directory_path / ext_id)
 
             if not manifest:
+                # load_extension_manifest() logs why; count it too, so the number of
+                # extensions reported is reconcilable with what is on disk.
+                unparsed.source(ext_id, 'manifest could not be read')
                 continue
 
             locale_messages = {}
@@ -2132,7 +2198,7 @@ class Chrome(WebBrowser):
                         with open(locale_messages_path, encoding='utf-8', errors='replace') as f:
                             locale_messages = json.load(f)
                     except (IOError, json.JSONDecodeError) as e:
-                        log.warning(f" - Error processing extension {ext_id}: {e}")
+                        unparsed.source(ext_id, f'manifest unreadable ({e})')
 
             name = self.get_localized_messages(locale_messages, manifest.get('name', ''))
             description = self.get_localized_messages(locale_messages, manifest.get('description', ''))
@@ -2159,9 +2225,8 @@ class Chrome(WebBrowser):
                 ext.content_scripts = manifest['content_scripts']
             disk_count += 1
 
-        self.artifacts_counts['Extensions'] = disk_count
-        log.info(f' - Parsed {disk_count} items')
         self._rebuild_installed_extensions()
+        return unparsed.result(disk_count)
 
     def _rebuild_installed_extensions(self):
         """Rebuild installed_extensions['data'] from the merged per-extension records.
@@ -2216,14 +2281,12 @@ class Chrome(WebBrowser):
                 prefs = json.loads(f.read())
         except Exception as e:
             log.exception(f' - Error decoding {preferences_file} file {pref_path}: {e}')
-            self.artifacts_counts[preferences_file] = 'Failed'
-            return
+            return None
 
         settings = prefs.get('extensions', {}).get('settings', {})
         if not settings:
             log.info(' - No extensions.settings found')
-            self.artifacts_counts[preferences_file] = 0
-            return
+            return 0
 
         timestamped_items = []
         count = 0
@@ -2334,9 +2397,9 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.extend(timestamped_items)
         self._rebuild_installed_extensions()
-        self.artifacts_counts[preferences_file] = count
         log.info(f' - Parsed {count} extension settings entries '
                  f'({len(timestamped_items)} Timeline events)')
+        return count
 
     def get_preferences(self, path, preferences_file):
         def check_and_append_pref(parent, pref, value=None, description=None):
@@ -2555,8 +2618,7 @@ class Chrome(WebBrowser):
 
         except Exception as e:
             log.exception(f' - Error decoding Preferences file {pref_path}: {e}')
-            self.artifacts_counts[preferences_file] = 'Failed'
-            return
+            return None
 
         # Account Information
         if prefs.get('account_info'):
@@ -2968,8 +3030,7 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.extend(timestamped_preference_items)
 
-        self.artifacts_counts[preferences_file] = len(results) + len(timestamped_preference_items)
-        log.info(f' - Parsed {self.artifacts_counts[preferences_file]} items')
+        preference_count = len(results) + len(timestamped_preference_items)
 
         try:
             profile_folder = os.path.split(path)[1]
@@ -2993,16 +3054,17 @@ class Chrome(WebBrowser):
                             ]}
 
         self.preferences.append({'data': results, 'presentation': presentation})
+        return preference_count
 
     def get_platform_notifications(self, path, dir_name):
         try:
             from ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
         except ImportError as e:
             log.exception(f' - Exception importing ccl_chromium_notifications: {e}')
-            self.artifacts_counts['Platform Notifications'] = 'Failed'
-            return
+            return None
 
         result_list = []
+        unparsed = ParseFailures('Platform Notifications')
         log.info('Platform Notifications:')
         pn_root_path = os.path.join(path, dir_name)
         log.info(f' - Reading from {pn_root_path}')
@@ -3077,16 +3139,14 @@ class Chrome(WebBrowser):
                             result_list.append(click_record)
 
                     except Exception as e:
-                        log.warning(f' - Exception parsing notification: {e}')
+                        unparsed.record('platform notification', f'could not parse ({e})')
 
         except Exception as e:
             log.warning(f' - Could not open {pn_root_path} as LevelDB; {e}')
-            self.artifacts_counts['Platform Notifications'] = 'Failed'
-            return
+            return None
 
-        log.info(f' - Parsed {len(result_list)} items')
-        self.artifacts_counts['Platform Notifications'] = len(result_list)
         self.parsed_artifacts.extend(result_list)
+        return unparsed.result(len(result_list))
 
     def get_service_workers(self, path, dir_name):
         """Parse service worker registrations from the Service Worker/Database LevelDB.
@@ -3095,6 +3155,7 @@ class Chrome(WebBrowser):
         See content/browser/service_worker/service_worker_database.proto in Chromium.
         """
         results = []
+        unparsed = ParseFailures('Service Workers')
 
         sw_root_path = os.path.join(path, dir_name)
         ldb_path = os.path.join(sw_root_path, 'Database')
@@ -3103,8 +3164,7 @@ class Chrome(WebBrowser):
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
-            self.artifacts_counts['Service Workers'] = 'Failed'
-            return
+            return None
 
         log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
 
@@ -3113,8 +3173,7 @@ class Chrome(WebBrowser):
             ldb_records = ccl_chromium_reader.storage_formats.ccl_leveldb.RawLevelDb(pathlib.Path(ldb_path))
         except ValueError as e:
             log.warning(f' - Error reading records ({e}); possible LevelDB corruption')
-            self.artifacts_counts['Service Workers'] = 'Failed'
-            return
+            return None
 
         from pyhindsight.lib.proto.components.services.storage.service_worker.service_worker_database_pb2 import \
             ServiceWorkerRegistrationData, ServiceWorkerResourceRecord
@@ -3211,7 +3270,7 @@ class Chrome(WebBrowser):
                     try:
                         reg.ParseFromString(record.value)
                     except Exception as e:
-                        log.warning(f' - Failed to decode REG record: {e}')
+                        unparsed.record('REG record', f'could not decode ({e})')
                         continue
 
                     nav_preload_enabled = None
@@ -3410,7 +3469,7 @@ class Chrome(WebBrowser):
                 sc = ccl_chromium_reader.ccl_chromium_cache.ChromiumSimpleFileCache(
                     pathlib.Path(script_cache_path))
             except Exception as e:
-                log.warning(f' - Could not open ScriptCache as disk_cache: {e}')
+                unparsed.source('ScriptCache', f'could not be opened as disk_cache ({e})')
                 sc = None
             if sc is not None:
                 try:
@@ -3432,7 +3491,7 @@ class Chrome(WebBrowser):
                             metas = sc.get_metadata(cache_key)
                             infos = sc.get_entry_info(cache_key)
                         except Exception as e:
-                            log.warning(f' - Failed to read ScriptCache entry {cache_key}: {e}')
+                            unparsed.record(f'ScriptCache/{cache_key}', f'could not be read ({e})')
                             continue
                         for body, meta, info in zip(bodies, metas, infos):
                             body_sha = hashlib.sha256(body).hexdigest() if body else None
@@ -3539,7 +3598,9 @@ class Chrome(WebBrowser):
                         for cache_key in sc.keys():
                             try:
                                 file_names = sc.get_file_for_key(cache_key)
-                            except Exception:
+                            except Exception as e:
+                                unparsed.record(f'ScriptCache/{cache_key}',
+                                              f'could not resolve backing file ({e})')
                                 continue
                             for fname in file_names:
                                 scf_path = os.path.join(cache_subdir, fname)
@@ -3645,12 +3706,13 @@ class Chrome(WebBrowser):
                  f'{resource_count} resource records, {user_data_count} user-data records, '
                  f'{orphan_count} orphan registrations, {script_count} script bodies, '
                  f'{cache_storage_count} cache storage entries')
-        self.artifacts_counts['Service Workers'] = len(results)
         self.parsed_storage.extend(results)
+        return unparsed.result(len(results))
 
     def get_cache(self, path, dir_name, row_type=None):
         # Set up empty return array
         results = []
+        unparsed = ParseFailures(dir_name)
 
         cache_path_to_parse = pathlib.Path(path, dir_name)
         log.info(f'Cache items from {cache_path_to_parse}:')
@@ -3664,7 +3726,7 @@ class Chrome(WebBrowser):
         # Using any() - returns True if directory has any contents
         if not any(pathlib.Path(cache_path_to_parse).iterdir()):
             log.info(' - Cache path is empty')
-            return
+            return 0
 
         cache_items = profile.iterate_cache(url=None, omit_cached_data=False)
         source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
@@ -3672,6 +3734,11 @@ class Chrome(WebBrowser):
         try:
             for cache_item in cache_items:
                 if not cache_item.metadata:
+                    # No metadata means no URL, timestamp, or headers to attribute the
+                    # entry to; it is dropped, so say so rather than quietly shrinking
+                    # the count.
+                    unparsed.record(str(getattr(cache_item, 'key', '<unknown key>')),
+                                  'cache entry has no metadata')
                     continue
 
                 parsed_item = WebBrowser.CacheItem(
@@ -3691,12 +3758,10 @@ class Chrome(WebBrowser):
 
         except Exception as e:
             log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
-            self.artifacts_counts[cache_display_name] = 'Failed'
-            return
+            return None
 
-        self.artifacts_counts[cache_display_name] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return unparsed.result(len(results))
 
     def get_unified_extension_data(self, path, dir_name):
         results = []
@@ -3709,8 +3774,7 @@ class Chrome(WebBrowser):
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
-            self.artifacts_counts[f'{dir_name}'] = 'Failed'
-            return
+            return None
 
         ldb_file_listing = os.listdir(ldb_path)
         log.debug(f' - {len(ldb_file_listing)} files in {dir_name} directory')
@@ -3721,7 +3785,7 @@ class Chrome(WebBrowser):
             ldb_records = ccl_chromium_reader.storage_formats.ccl_leveldb.RawLevelDb(pathlib.Path(ldb_path))
         except ValueError as e:
             log.warning(f' - Error reading records ({e}); possible LevelDB corruption')
-            self.artifacts_counts[f'{dir_name}'] = 'Failed'
+            return None
 
         # For the 'Extension Scripts' StateStore, capture the latest (highest-seq,
         # non-deleted) 'dynamic_scripts' value per extension for the live merge, and ALSO
@@ -3761,29 +3825,28 @@ class Chrome(WebBrowser):
                             dynamic_scripts_raw[ext_id] = (record.seq, parsed.value)
 
             ldb_records.close()
-            self.artifacts_counts[f'{dir_name}'] = len(results)
 
         if dynamic_scripts_raw:
             self._merge_dynamic_scripts(dynamic_scripts_raw)
         if dynamic_scripts_all:
             self._carve_dynamic_scripts(dynamic_scripts_all)
 
-        log.info(f' - Parsed {len(results)} {dir_name} items')
         self.parsed_extension_data.extend(results)
+        return len(results)
 
     def get_dnr_extension_rules(self, path, dir_name):
         """Parse declarativeNetRequest DYNAMIC rules from
         ``<profile>/DNR Extension Rules/<ext_id>/rules.json``.
         """
         results = []
+        unparsed = ParseFailures('DNR Extension Rules')
         dnr_path = os.path.join(path, dir_name)
         log.info(f'{dir_name}:')
         log.info(f' - Reading from {dnr_path}')
 
         if not os.path.isdir(dnr_path):
             log.error(f' - {dnr_path} is not a directory')
-            self.artifacts_counts[dir_name] = 'Failed'
-            return
+            return None
 
         for ext_id in sorted(os.listdir(dnr_path)):
             ext_dir = os.path.join(dnr_path, ext_id)
@@ -3804,7 +3867,7 @@ class Chrome(WebBrowser):
                 with open(rules_json, encoding='utf-8', errors='replace') as f:
                     rules = json.load(f)
             except (OSError, json.JSONDecodeError) as e:
-                log.warning(f' - Error reading {rules_json}: {e}')
+                unparsed.source(rules_json, f'unreadable ({e})')
                 continue
 
             if not isinstance(rules, list):
@@ -3826,9 +3889,8 @@ class Chrome(WebBrowser):
                 parsed.row_type = dir_name.lower()
                 results.append(parsed)
 
-        self.artifacts_counts[dir_name] = len(results)
-        log.info(f' - Parsed {len(results)} {dir_name} items')
         self.parsed_extension_data.extend(results)
+        return unparsed.result(len(results))
 
     @staticmethod
     def _normalize_dynamic_script(entry):
@@ -4001,6 +4063,7 @@ class Chrome(WebBrowser):
 
     def get_partitioned_extension_data(self, path, dir_name):
         results = []
+        unparsed = ParseFailures('extension storage')
         any_failed = False
 
         # Grab file list of input directory
@@ -4009,8 +4072,7 @@ class Chrome(WebBrowser):
         log.info(f' - Reading from {top_path}')
         if not os.path.isdir(top_path):
             log.error(f' - {top_path} is not a directory')
-            self.artifacts_counts[f'{dir_name}'] = 'Failed'
-            return
+            return None
 
         top_file_listing = os.listdir(top_path)
 
@@ -4029,9 +4091,7 @@ class Chrome(WebBrowser):
             log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
 
             if not os.path.isdir(ldb_path):
-                log.error(f' - {ldb_path} is not a directory')
-                self.artifacts_counts[f'{dir_name}'] = 'Failed'
-                any_failed = True
+                unparsed.source(ldb_path, 'not a directory')
                 continue
 
             ldb_file_listing = os.listdir(ldb_path)
@@ -4042,8 +4102,7 @@ class Chrome(WebBrowser):
             try:
                 ldb_records = ccl_chromium_reader.storage_formats.ccl_leveldb.RawLevelDb(pathlib.Path(ldb_path))
             except ValueError as e:
-                log.warning(f' - Error reading records ({e}); possible LevelDB corruption')
-                self.artifacts_counts[f'{dir_name}'] = 'Failed'
+                unparsed.source(ldb_path, f'possible LevelDB corruption ({e})')
 
             if ldb_records:
                 for record in ldb_records.iterate_records_raw():
@@ -4058,12 +4117,11 @@ class Chrome(WebBrowser):
 
                 ldb_records.close()
 
-        if any_failed:
-            self.artifacts_counts[f'{dir_name}'] = 'Failed'
-        else:
-            self.artifacts_counts[f'{dir_name}'] = len(results)
-        log.info(f' - Parsed {len(results)} {dir_name} items')
         self.parsed_extension_data.extend(results)
+        # Whatever parsed is still emitted, and the count is kept: reporting the whole
+        # artifact as failed used to discard a usable count because one store of many
+        # was corrupt.
+        return unparsed.result(len(results))
 
     @staticmethod
     def parse_ls_ldb_record(record):
@@ -4201,6 +4259,7 @@ class Chrome(WebBrowser):
     def get_file_system(self, path, dir_name):
 
         result_list = []
+        unparsed = ParseFailures('File System')
         result_count = 0
 
         # Grab listing of 'File System' directory
@@ -4209,8 +4268,7 @@ class Chrome(WebBrowser):
         log.info(f' - Reading from {fs_root_path}')
         if not os.path.isdir(fs_root_path):
             log.error(f' - {fs_root_path} is not a directory')
-            self.artifacts_counts['File System'] = 'Failed'
-            return
+            return None
 
         fs_root_listing = os.listdir(fs_root_path)
         log.debug(f' - {len(fs_root_listing)} files in File System directory: {str(fs_root_listing)}')
@@ -4279,12 +4337,16 @@ class Chrome(WebBrowser):
                             name, ptr = utils.read_string(item['value'], ptr)
                             mod_time, ptr = utils.read_int64(item['value'], ptr)
 
-                            backing_files[item['key'].decode()] = {
+                            # Held in a local rather than re-subscripted below: the only
+                            # *read* of backing_files[...] should be the guarded lookup
+                            # in the CHILD_OF pass, where the key may not exist.
+                            backing_file = {
                                 'modification_time': mod_time,
                                 'seq': item['seq'],
                                 'state': item['state'],
                                 'source_path': item['origin_file']
                             }
+                            backing_files[item['key'].decode()] = backing_file
 
                             path_parts = re.split(r'[/\\]', backing_file_path)
                             # Need at least two segments to index [0] and [1]; a
@@ -4295,15 +4357,15 @@ class Chrome(WebBrowser):
                                     path_nodes['0']['fs_path'], fs_type, path_parts[0], path_parts[1])
                                 file_exists, file_size, magic_results = self.get_local_file_info(
                                            os.path.join(self.profile_path, normalized_backing_file_path))
-                                backing_files[item['key'].decode()]['file_exists'] = file_exists
-                                backing_files[item['key'].decode()]['file_size'] = file_size
-                                backing_files[item['key'].decode()]['magic_results'] = magic_results
+                                backing_file['file_exists'] = file_exists
+                                backing_file['file_size'] = file_size
+                                backing_file['magic_results'] = magic_results
 
                             else:
                                 normalized_backing_file_path = os.path.join(
                                     path_nodes['0']['fs_path'], fs_type, backing_file_path)
 
-                            backing_files[item['key'].decode()]['backing_file_path'] = normalized_backing_file_path
+                            backing_file['backing_file_path'] = normalized_backing_file_path
 
                     # Loop over records again, this time to add to the path_nodes dict (used later to construct
                     # the logical path for items in FileSystem. We look at deleted records here; while the value
@@ -4335,14 +4397,24 @@ class Chrome(WebBrowser):
                         }
 
                         if not item['value'] == b'':
-                            value_dict = {
-                                'fs_path': backing_files[item['value'].decode()]['backing_file_path'],
-                                'modification_time': backing_files[item['value'].decode()]['modification_time'],
-                                'file_exists': backing_files[item['value'].decode()].get('file_exists'),
-                                'file_size': backing_files[item['value'].decode()].get('file_size'),
-                                'magic_results': backing_files[item['value'].decode()].get('magic_results'),
-                            }
-                            path_nodes[path_node_key].update(value_dict)
+                            file_id = item['value'].decode()
+                            backing_file = backing_files.get(file_id)
+                            if backing_file is None:
+                                # The entry names a file_id with no surviving FileInfo
+                                # record (its own record was deleted). The name and
+                                # logical path are still recoverable, so keep the node
+                                # and record what could not be attached to it.
+                                unparsed.record(
+                                    f'{origin_domain} ({fs_type}) file_id {file_id}',
+                                    'no FileInfo record; path and metadata unavailable')
+                            else:
+                                path_nodes[path_node_key].update({
+                                    'fs_path': backing_file.get('backing_file_path'),
+                                    'modification_time': backing_file.get('modification_time'),
+                                    'file_exists': backing_file.get('file_exists'),
+                                    'file_size': backing_file.get('file_size'),
+                                    'magic_results': backing_file.get('magic_results'),
+                                })
 
                         result_count += 1
 
@@ -4362,7 +4434,10 @@ class Chrome(WebBrowser):
                         parent_node['children'][entry_id] = node
 
                     if '0' not in node_tree:
-                        log.debug(' - Missing root node; skipping logical path build for this origin')
+                        # Without a root there is no logical path to build, so this
+                        # origin's entries never reach the output at all.
+                        unparsed.source(f'{origin_domain} ({fs_type})',
+                                      'missing root node; logical paths not built')
                         continue
 
                     self.build_logical_fs_path(node_tree['0'])
@@ -4378,9 +4453,8 @@ class Chrome(WebBrowser):
                             magic_results=item.get('magic_results')
                         ))
 
-        log.info(f' - Parsed {len(result_list)} items')
-        self.artifacts_counts['File System'] = len(result_list)
         self.parsed_storage.extend(result_list)
+        return unparsed.result(len(result_list))
 
     def get_site_characteristics(self, path, dir_name):
         result_list = []
@@ -4394,8 +4468,7 @@ class Chrome(WebBrowser):
         # Grab listing of 'Site Characteristics' directory
         if not os.path.isdir(sc_root_path):
             log.error(f' - {sc_root_path} is not a directory')
-            self.artifacts_counts['Site Characteristics'] = 'Failed'
-            return
+            return None
 
         sc_root_listing = os.listdir(sc_root_path)
         log.debug(f' - {len(sc_root_listing)} files in Site Characteristics directory: {str(sc_root_listing)}')
@@ -4438,9 +4511,8 @@ class Chrome(WebBrowser):
             except Exception as e:
                 log.exception(f' - Exception parsing SiteDataProto ({item}): {e}')
 
-        log.info(f' - Parsed {len(result_list)} items')
-        self.artifacts_counts['Site Characteristics'] = len(result_list)
         self.parsed_artifacts.extend(result_list)
+        return len(result_list)
 
     def get_sync_data(self, path, dir_name):
         result_list = []
@@ -4452,8 +4524,7 @@ class Chrome(WebBrowser):
         # Grab listing of 'Sync Data' directory
         if not os.path.isdir(sync_data_root_path):
             log.error(f' - {sync_data_root_path} is not a directory')
-            self.artifacts_counts['Sync Data'] = 'Failed'
-            return
+            return None
 
         sd_root_listing = os.listdir(sync_data_root_path)
         log.debug(f' - {len(sd_root_listing)} files in Sync Data directory: {str(sd_root_listing)}')
@@ -4584,9 +4655,8 @@ class Chrome(WebBrowser):
                 file_type=item.get('file_type'))
             result_list.append(sync_record)
 
-        log.info(f' - Parsed {len(result_list)} items')
-        self.artifacts_counts['Sync Data'] = len(result_list)
         self.parsed_sync_data.extend(result_list)
+        return len(result_list)
 
     def build_hsts_domain_hashes(self):
         domains = self.get_clean_hostnames()
@@ -4685,11 +4755,10 @@ class Chrome(WebBrowser):
 
             else:
                 log.warning('Unable to process TransportSecurity file; could not determine version.')
-                return
+                return None
 
-        log.info(f' - Parsed {len(result_list)} items')
-        self.artifacts_counts['HSTS'] = len(result_list)
         self.parsed_artifacts.extend(result_list)
+        return len(result_list)
 
     def resolve_kg_entities(self, api_key):
         """Resolve Knowledge Graph entity/category IDs to human-readable names via Google's KG API."""
@@ -4801,20 +4870,19 @@ class Chrome(WebBrowser):
                 driver.run(
                     'URL', 'History', self.get_history,
                     self.profile_path, 'History', self.version, 'url',
-                    display_key='History', display_value=f'URL records',
+                    display_value=f'URL records',
                     artifact='history')
 
                 driver.run(
                     'Download', 'History_downloads', self.get_downloads,
                     self.profile_path, 'History', self.version, 'download',
-                    display_key='History_downloads', display_value=f'Download records',
+                    display_value=f'Download records',
                     artifact='downloads')
 
             if 'shared_proto_db' in input_listing:
                 driver.run(
                     'Downloads (shared_proto_db)', 'shared_proto_db downloads',
                     self.get_shared_proto_db_downloads, self.profile_path, 'shared_proto_db',
-                    display_key='shared_proto_db downloads',
                     display_value='shared_proto_db download records',
                     artifact='downloads')
 
@@ -4822,49 +4890,49 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Archived History', 'Archived History', self.get_history,
                     self.profile_path, 'Archived History', self.version, 'url (archived)',
-                    display_key='Archived History', display_value='Archived URL records',
+                    display_value='Archived URL records',
                     artifact='archived-history')
 
             if 'Media History' in input_listing:
                 driver.run(
                     'Media History', 'Media History', self.get_media_history,
                     self.profile_path, 'Media History', self.version, 'media (playback end)',
-                    display_key='Media History', display_value='Media History records',
+                    display_value='Media History records',
                     artifact='media-history')
 
             if 'Web Data' in input_listing:
                 driver.run(
                     'Autofill', 'Autofill', self.get_autofill,
                     self.profile_path, 'Web Data', self.version,
-                    display_key='Autofill', display_value='Autofill records',
+                    display_value='Autofill records',
                     artifact='autofill')
 
             if 'Login Data' in input_listing:
                 driver.run(
                     'Login Data', 'Login Data', self.get_login_data,
                     self.profile_path, 'Login Data', self.version,
-                    display_key='Login Data', display_value='Login Data records',
+                    display_value='Login Data records',
                     artifact='logins')
 
             if 'Login Data For Account' in input_listing:
                 driver.run(
                     'Login Data', 'Login Data', self.get_login_data,
                     self.profile_path, 'Login Data For Account', self.version,
-                    display_key='Login Data', display_value='Login Data (Account) records',
+                    display_value='Login Data (Account) records',
                     artifact='logins')
 
             if 'Bookmarks' in input_listing:
                 driver.run(
                     'Bookmarks', 'Bookmarks', self.get_bookmarks,
                     self.profile_path, 'Bookmarks', self.version,
-                    display_key='Bookmarks', display_value='Bookmark records',
+                    display_value='Bookmark records',
                     artifact='bookmarks')
 
             if 'Sessions' in input_listing:
                 driver.run(
                     'Sessions', 'Sessions', self.get_sessions,
                     self.profile_path, 'Sessions',
-                    display_key='Sessions', display_value='Session (SNSS) records',
+                    display_value='Session (SNSS) records',
                     artifact='sessions')
 
             # Website Storage
@@ -4873,14 +4941,14 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Network Cookies', 'Cookies', self.get_cookies,
                     os.path.join(self.profile_path, 'Network'), 'Cookies', self.version,
-                    display_key='Cookies', display_value='Cookie records',
+                    display_value='Cookie records',
                     artifact='cookies')
 
             elif 'Cookies' in input_listing:
                 driver.run(
                     'Cookies', 'Cookies', self.get_cookies,
                     self.profile_path, 'Cookies', self.version,
-                    display_key='Cookies', display_value='Cookie records',
+                    display_value='Cookie records',
                     artifact='cookies')
 
             if self.cache_path is not None and self.cache_path != '':
@@ -4888,7 +4956,7 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Cache', 'Cache', self.get_cache,
                     c_path, c_dir, row_type='cache',
-                    display_key='Cache', display_value='Cache records',
+                    display_value='Cache records',
                     artifact='cache')
 
             elif 'Cache' in input_listing:
@@ -4896,13 +4964,13 @@ class Chrome(WebBrowser):
                     driver.run(
                         'Cache', 'Cache', self.get_cache,
                         os.path.join(self.profile_path, 'Cache'), 'Cache_Data', row_type='cache',
-                        display_key='Cache', display_value='Cache records',
+                        display_value='Cache records',
                         artifact='cache')
                 else:
                     driver.run(
                         'Cache', 'Cache', self.get_cache,
                         self.profile_path, 'Cache', row_type='cache',
-                        display_key='Cache', display_value='Cache records',
+                        display_value='Cache records',
                         artifact='cache')
                 
             for cache_dir, cache_type, cache_artifact in SECONDARY_CACHE_DIRS:
@@ -4910,49 +4978,49 @@ class Chrome(WebBrowser):
                     driver.run(
                         cache_dir, cache_dir, self.get_cache,
                         self.profile_path, cache_dir, row_type=f'cache ({cache_type})',
-                        display_key=cache_dir, display_value=f'{cache_dir} records',
+                        display_value=f'{cache_dir} records',
                         artifact=cache_artifact)
 
             if 'Local Storage' in input_listing:
                 driver.run(
                     'Local Storage', 'Local Storage', self.get_local_storage,
                     self.profile_path, 'Local Storage',
-                    display_key='Local Storage', display_value='Local Storage records',
+                    display_value='Local Storage records',
                     artifact='local-storage')
 
             if 'Session Storage' in input_listing:
                 driver.run(
                     'Session Storage', 'Session Storage', self.get_session_storage,
                     self.profile_path, 'Session Storage',
-                    display_key='Session Storage', display_value='Session Storage records',
+                    display_value='Session Storage records',
                     artifact='session-storage')
 
             if 'IndexedDB' in input_listing:
                 driver.run(
                     'IndexedDB', 'IndexedDB', self.get_indexeddb,
                     self.profile_path, 'IndexedDB',
-                    display_key='IndexedDB', display_value='IndexedDB records',
+                    display_value='IndexedDB records',
                     artifact='indexeddb')
 
             if 'File System' in input_listing:
                 driver.run(
                     'File System', 'File System', self.get_file_system,
                     self.profile_path, 'File System',
-                    display_key='File System', display_value='File System items',
+                    display_value='File System items',
                     artifact='file-system')
 
             if 'Platform Notifications' in input_listing:
                 driver.run(
                     'Platform Notifications', 'Platform Notifications', self.get_platform_notifications,
                     self.profile_path, 'Platform Notifications',
-                    display_key='Platform Notifications', display_value='Platform Notification records',
+                    display_value='Platform Notification records',
                     artifact='notifications')
 
             if 'Service Worker' in input_listing:
                 driver.run(
                     'Service Workers', 'Service Workers', self.get_service_workers,
                     self.profile_path, 'Service Worker',
-                    display_key='Service Workers', display_value='Service Worker registrations',
+                    display_value='Service Worker registrations',
                     artifact='service-workers')
 
             # Browser Extensions
@@ -4962,14 +5030,14 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Extensions', 'Extensions', self.get_extensions,
                     self.profile_path, 'Extensions',
-                    display_key='Extensions', display_value='Installed Extensions',
+                    display_value='Installed Extensions',
                     artifact='extensions')
 
             if 'Secure Preferences' in input_listing:
                 driver.run(
                     'Extension Settings', 'Secure Preferences', self.get_extension_settings,
                     self.profile_path, 'Secure Preferences',
-                    display_key='Extension Settings', display_value='Extension settings entries',
+                    display_value='Extension settings entries',
                     artifact='extension-settings')
 
             if 'Extension Cookies' in input_listing:
@@ -4984,7 +5052,7 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Extension Cookies', 'Extension Cookies', self.get_cookies,
                     self.profile_path, 'Extension Cookies', ext_cookies_version,
-                    display_key='Extension Cookies', display_value='Extension Cookie records',
+                    display_value='Extension Cookie records',
                     artifact='extension-cookies')
 
             for directory in ['Extension Rules', 'Extension Scripts', 'Extension State']:
@@ -4992,14 +5060,14 @@ class Chrome(WebBrowser):
                     driver.run(
                         directory, directory, self.get_unified_extension_data,
                         self.profile_path, directory,
-                        display_key=f'{directory}', display_value=f'{directory} records',
+                        display_value=f'{directory} records',
                         artifact='extension-storage')
 
             if 'DNR Extension Rules' in input_listing:
                 driver.run(
                     'DNR Extension Rules', 'DNR Extension Rules', self.get_dnr_extension_rules,
                     self.profile_path, 'DNR Extension Rules',
-                    display_key='DNR Extension Rules', display_value='DNR Extension Rules records',
+                    display_value='DNR Extension Rules records',
                     artifact='dnr-rules')
 
             for directory in ['Local App Settings', 'Local Extension Settings',
@@ -5008,7 +5076,7 @@ class Chrome(WebBrowser):
                     driver.run(
                         directory, directory, self.get_partitioned_extension_data,
                         self.profile_path, directory,
-                        display_key=f'{directory}', display_value=f'{directory} records',
+                        display_value=f'{directory} records',
                         artifact='extension-storage')
 
             # Configuration & Supporting Data
@@ -5018,48 +5086,48 @@ class Chrome(WebBrowser):
                 driver.run(
                     'Preferences', 'Preferences', self.get_preferences,
                     self.profile_path, 'Preferences',
-                    display_key='Preferences', display_value='Preference items',
+                    display_value='Preference items',
                     artifact='preferences')
 
             if 'Site Characteristics Database' in input_listing:
                 driver.run(
                     'Site Characteristics', 'Site Characteristics', self.get_site_characteristics,
                     self.profile_path, 'Site Characteristics Database',
-                    display_key='Site Characteristics', display_value='Site Characteristics records',
+                    display_value='Site Characteristics records',
                     artifact='site-characteristics')
 
             if 'Sync Data' in input_listing:
                 driver.run(
                     'Sync Data', 'Sync Data', self.get_sync_data,
                     self.profile_path, 'Sync Data',
-                    display_key='Sync Data', display_value='Sync Data records',
+                    display_value='Sync Data records',
                     artifact='sync-data')
 
             if network_listing and 'TransportSecurity' in network_listing:
                 driver.run(
                     'Network HSTS', 'HSTS', self.get_transport_security,
                     os.path.join(self.profile_path, 'Network'), 'TransportSecurity',
-                    display_key='HSTS', display_value='HSTS records',
+                    display_value='HSTS records',
                     artifact='hsts')
 
             elif 'TransportSecurity' in input_listing:
                 driver.run(
                     'HSTS', 'HSTS', self.get_transport_security,
                     self.profile_path, 'TransportSecurity',
-                    display_key='HSTS', display_value='HSTS records',
+                    display_value='HSTS records',
                     artifact='hsts')
 
             if 'DIPS' in input_listing:
                 driver.run(
                     'DIPS Popups', 'DIPS Popups', self.get_dips_popups,
                     self.profile_path, 'DIPS', self.version,
-                    display_key='DIPS Popups', display_value='DIPS Popup records',
+                    display_value='DIPS Popup records',
                     artifact='dips')
 
                 driver.run(
                     'DIPS', 'DIPS', self.get_dips,
                     self.profile_path, 'DIPS', self.version,
-                    display_key='DIPS', display_value='DIPS records',
+                    display_value='DIPS records',
                     artifact='dips')
 
         # Destroy the cached key so that JSON serialization doesn't
@@ -5093,10 +5161,6 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
         self.parsed_storage.sort()
-
-        # Split parse failures out of the record counts now that the live display has
-        # finished reading them.
-        self.finalize_artifact_status()
 
         # Clean temp directory after processing profile
         if not self.no_copy:

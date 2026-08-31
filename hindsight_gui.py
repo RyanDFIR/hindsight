@@ -207,9 +207,15 @@ def display_results():
     return bottle.template('templates/results.tpl', {
         'js_installed': os.path.exists(
             os.path.join(STATIC_PATH, 'web_modules/sqlite-view.js')),
-        # A method, so it isn't in __dict__; the artifacts table needs it to show
-        # "failed" instead of a count of 0 for an artifact that couldn't be parsed.
+        # These are derived from artifact_results rather than stored, so they are
+        # properties and don't appear in __dict__. The artifacts table needs all of
+        # them -- the status ones so an artifact that couldn't be parsed shows as
+        # "failed" rather than as a count of 0.
+        'artifacts_counts': analysis_session.artifacts_counts,
+        'artifacts_display': analysis_session.artifacts_display,
+        'artifacts_status': analysis_session.artifacts_status,
         'artifact_status_summary': analysis_session.artifact_status_summary(),
+        'artifact_status_descriptions': analysis_session.artifact_status_descriptions(),
         **analysis_session.__dict__
         })
 

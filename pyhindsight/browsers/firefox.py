@@ -10,7 +10,8 @@ import struct
 import urllib.parse
 
 from pyhindsight import utils
-from pyhindsight.browsers.webbrowser import WebBrowser, timeline_sort_key
+from pyhindsight.browsers.webbrowser import (
+    ParseFailures, WebBrowser, timeline_sort_key)
 
 log = logging.getLogger(__name__)
 
@@ -148,24 +149,15 @@ class Firefox(WebBrowser):
         if self.structure is None:
             self.structure = {}
 
-    def _open(self, path, database, count_key):
-        """Open a profile database, recording a failure under `count_key`.
+    def _open(self, path, database):
+        """Open a profile database, returning None if it could not be opened.
 
-        `count_key` must be the same `artifacts_counts` key this caller reports its
-        record count under -- not the filename, unless they happen to match. The live
-        display and the run's status summary look the artifact up by that key, so a
-        failure filed under the filename is invisible to both: the display falls back to
-        "0", which reads as "parsed fine, found nothing" rather than "could not read".
-
-        Pass `count_key=None` for a probe that is not an artifact parse (version
-        detection), so a failed probe doesn't mark an artifact as failed.
+        Callers translate None into their own ``return None``, which the driver records
+        as a failed parse for whichever artifact the caller was invoked for. The helper
+        deliberately doesn't report anything itself: it has no idea which artifact its
+        caller is parsing.
         """
-        conn = utils.open_sqlite_db(self, path, database)
-        if not conn:
-            if count_key is not None:
-                self.artifacts_counts[count_key] = 'Failed'
-            return None
-        return conn
+        return utils.open_sqlite_db(self, path, database) or None
 
     @staticmethod
     def _visit_type_friendly(visit_type):
@@ -175,9 +167,9 @@ class Firefox(WebBrowser):
 
     def determine_version(self, path, database='places.sqlite'):
         # places.sqlite tracks schema with PRAGMA user_version; Firefox 62+ is >= 52.
-        conn = self._open(path, database, count_key=None)
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
         try:
             cursor = conn.cursor()
             cursor.execute('PRAGMA user_version')
@@ -218,9 +210,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'History items from {database}:')
 
-        conn = self._open(path, database, count_key=database)
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         # `description` and `preview_image_url` were added to moz_places in
         # MigrateV38Up (places schema v38 / Firefox 57). Profiles below that — e.g.
@@ -263,8 +255,7 @@ class Firefox(WebBrowser):
             cursor = conn.cursor()
             if not self._execute_versioned_query(cursor, queries, 'history'):
                 log.error(' - Could not query history with any known schema')
-                self.artifacts_counts[database] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
@@ -294,9 +285,8 @@ class Firefox(WebBrowser):
                     new_row.interpretation = f'Referrer: {from_url}'
                 results.append(new_row)
 
-            self.artifacts_counts[database] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -305,9 +295,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Bookmark items from {database}:')
 
-        conn = self._open(path, database, count_key='Bookmarks')
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -352,9 +342,8 @@ class Firefox(WebBrowser):
                     item.source_item = source_item
                     results.append(item)
 
-            self.artifacts_counts['Bookmarks'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -364,9 +353,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Cookie items from {database}:')
 
-        conn = self._open(path, database, count_key='Cookies')
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -378,8 +367,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query cookies: {e}')
-                self.artifacts_counts['Cookies'] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
@@ -427,9 +415,8 @@ class Firefox(WebBrowser):
                     accessed_row.timestamp = accessed
                     results.append(accessed_row)
 
-            self.artifacts_counts['Cookies'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -439,9 +426,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Download items from {database}:')
 
-        conn = self._open(path, database, count_key=database + '_downloads')
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -456,8 +443,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query downloads: {e}')
-                self.artifacts_counts[database + '_downloads'] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
@@ -493,9 +479,8 @@ class Firefox(WebBrowser):
                 item.source_item = source_item
                 results.append(item)
 
-            self.artifacts_counts[database + '_downloads'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -505,9 +490,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Form history items from {database}:')
 
-        conn = self._open(path, database, count_key=database)
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -529,8 +514,7 @@ class Firefox(WebBrowser):
                     cursor.execute("SELECT fieldname, value FROM moz_formhistory")
             except Exception as e:
                 log.error(f' - Could not query form history: {e}')
-                self.artifacts_counts[database] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
@@ -562,10 +546,8 @@ class Firefox(WebBrowser):
                 item.source_item = source_item
                 results.append(item)
 
-            self.artifacts_counts[database] = len(results)
-            self.artifacts_display['Autofill'] = 'Form history records'
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -590,9 +572,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Permissions items from {database}:')
 
-        conn = self._open(path, database, count_key='Permissions')
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -604,8 +586,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query permissions: {e}')
-                self.artifacts_counts['Permissions'] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
@@ -640,9 +621,8 @@ class Firefox(WebBrowser):
                 item.value = perm_label
                 results.append(item)
 
-            self.artifacts_counts['Permissions'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -661,15 +641,14 @@ class Firefox(WebBrowser):
         log.info(f'HSTS items from {filename}:')
         if not os.path.isfile(full_path):
             log.info(f' - {full_path} not present')
-            return
+            return 0
 
         try:
             with open(full_path, 'rb') as fh:
                 blob = fh.read()
         except OSError as e:
             log.error(f' - Could not read {full_path}: {e}')
-            self.artifacts_counts['HSTS'] = 'Failed'
-            return
+            return None
 
         source_item = os.path.relpath(full_path, self.profile_path)
         n_records = len(blob) // self._HSTS_RECORD_SIZE
@@ -743,9 +722,8 @@ class Firefox(WebBrowser):
             item.source_item = source_item
             results.append(item)
 
-        self.artifacts_counts['HSTS'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     @staticmethod
     def _parse_prefs_value(raw):
@@ -767,7 +745,7 @@ class Firefox(WebBrowser):
         log.info(f'Preferences from {prefs_file}:')
         if not os.path.isfile(full_path):
             log.info(f' - {full_path} not present')
-            return
+            return 0
 
         all_prefs = {}
         try:
@@ -784,8 +762,7 @@ class Firefox(WebBrowser):
                     all_prefs[name] = value
         except OSError as e:
             log.error(f' - Could not read {full_path}: {e}')
-            self.artifacts_counts['Preferences'] = 'Failed'
-            return
+            return None
 
         results = []
         seen = set()
@@ -826,7 +803,6 @@ class Firefox(WebBrowser):
                 })
 
         pref_count = sum(1 for r in results if r['name'] is not None)
-        self.artifacts_counts['Preferences'] = pref_count
 
         profile_folder = os.path.basename(path.rstrip(os.sep)) or 'profile'
         presentation = {
@@ -840,6 +816,7 @@ class Firefox(WebBrowser):
         }
         self.preferences.append({'data': results, 'presentation': presentation})
         log.info(f' - Parsed {pref_count} preferences')
+        return pref_count
 
     def get_logins(self, path, filename='logins.json'):
         # Username and password values are NSS/3DES-CBC encrypted (key wrapped in key4.db).
@@ -849,15 +826,14 @@ class Firefox(WebBrowser):
         log.info(f'Saved logins from {filename}:')
         if not os.path.isfile(full_path):
             log.info(f' - {full_path} not present')
-            return
+            return 0
 
         try:
             with open(full_path, 'r', encoding='utf-8', errors='replace') as fh:
                 data = json.load(fh)
         except (OSError, json.JSONDecodeError) as e:
             log.error(f' - Could not read {full_path}: {e}')
-            self.artifacts_counts['Logins'] = 'Failed'
-            return
+            return None
 
         source_item = os.path.relpath(full_path, self.profile_path)
         zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
@@ -937,9 +913,8 @@ class Firefox(WebBrowser):
             item.source_item = source_item
             results.append(item)
 
-        self.artifacts_counts['Logins'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     @staticmethod
     def _snappy_decompress(src):
@@ -1082,15 +1057,14 @@ class Firefox(WebBrowser):
         log.info(f'Installed extensions from {filename}:')
         if not os.path.isfile(full_path):
             log.info(f' - {full_path} not present')
-            return
+            return 0
 
         try:
             with open(full_path, 'r', encoding='utf-8', errors='replace') as fh:
                 data = json.load(fh)
         except (OSError, json.JSONDecodeError) as e:
             log.error(f' - Could not read {full_path}: {e}')
-            self.artifacts_counts['Extensions'] = 'Failed'
-            return
+            return None
 
         results = []
         for addon in data.get('addons', []):
@@ -1148,8 +1122,6 @@ class Firefox(WebBrowser):
                 manifest=json.dumps(manifest_summary),
             ))
 
-        self.artifacts_counts['Extensions'] = len(results)
-        log.info(f' - Parsed {len(results)} items')
 
         presentation = {
             'title': 'Installed Extensions',
@@ -1164,6 +1136,7 @@ class Firefox(WebBrowser):
             ],
         }
         self.installed_extensions = {'data': results, 'presentation': presentation}
+        return len(results)
 
     # Firefox 'sizemode' -> the Chrome-style window state labels the Sessions sheet uses.
     SESSIONSTORE_SIZEMODES = {
@@ -1381,6 +1354,7 @@ class Firefox(WebBrowser):
         # (previous live), previous.jsonlz4 (last clean close), upgrade.jsonlz4-<ts>
         # (per-upgrade snapshot, often preserves state from older Firefox versions).
         results = []
+        unparsed = ParseFailures('Sessions')
         log.info('Sessionstore items:')
 
         candidates = []
@@ -1401,7 +1375,7 @@ class Firefox(WebBrowser):
 
         if not candidates:
             log.info(' - No sessionstore files found')
-            return
+            return 0
 
         # Snapshots overlap heavily, so every window is merged into one structure keyed
         # by content; seen_windows maps a layout signature to the window that owns it.
@@ -1419,7 +1393,7 @@ class Firefox(WebBrowser):
                     continue
                 doc = json.loads(raw)
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                log.warning(f' - Could not parse {full_path}: {e}')
+                unparsed.source(full_path, f'could not be parsed ({e})')
                 continue
             source_item = os.path.relpath(full_path, self.profile_path)
             before = structure['entries_seen']
@@ -1449,12 +1423,12 @@ class Firefox(WebBrowser):
         # Most navigation entries have no timestamp of their own and are rendered on the
         # Sessions sheet only, so count what was parsed rather than what reached the
         # Timeline.
-        self.artifacts_counts['Sessions'] = entries_seen
         log.info(f' - Parsed {entries_seen} entries from {len(candidates)} snapshot(s) '
                  f'into {len(structure["windows"])} distinct window(s); '
                  f'{len(deduped)} timeline row(s) after collapsing '
                  f'{len(results) - len(deduped)} duplicate(s)')
         self.parsed_artifacts.extend(deduped)
+        return unparsed.result(entries_seen)
 
     def get_bookmark_backups(self, path):
         # Firefox writes a fresh jsonlz4 snapshot of the bookmark tree daily and
@@ -1463,10 +1437,11 @@ class Firefox(WebBrowser):
         log.info('Bookmark backups:')
         if not os.path.isdir(backups_dir):
             log.info(f' - {backups_dir} not present')
-            return
+            return 0
 
         zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
         results = []
+        unparsed = ParseFailures('Bookmark Backups')
 
         def _walk(node, parent_title, snapshot_label, source_item):
             type_code = node.get('typeCode')
@@ -1521,7 +1496,7 @@ class Firefox(WebBrowser):
                     with open(full, 'r', encoding='utf-8', errors='replace') as fh:
                         doc = json.load(fh)
             except (json.JSONDecodeError, OSError) as e:
-                log.warning(f' - Could not parse {full}: {e}')
+                unparsed.source(full, f'could not be parsed ({e})')
                 continue
             source_item = os.path.relpath(full, self.profile_path)
             before = len(results)
@@ -1529,9 +1504,9 @@ class Firefox(WebBrowser):
                 _walk(child, '', name, source_item)
             log.info(f' - {name}: {len(results) - before} entries')
 
-        self.artifacts_counts['Bookmark Backups'] = len(results)
         log.info(f' - Parsed {len(results)} items total')
         self.parsed_artifacts.extend(results)
+        return unparsed.result(len(results))
 
     def get_favicons(self, path, database='favicons.sqlite'):
         # favicons.sqlite survives 'Clear History' on places.sqlite, so pages
@@ -1539,9 +1514,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Favicon items from {database}:')
 
-        conn = self._open(path, database, count_key='Favicons')
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -1554,8 +1529,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query favicons: {e}')
-                self.artifacts_counts['Favicons'] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
@@ -1596,9 +1570,8 @@ class Firefox(WebBrowser):
                 item.source_item = source_item
                 results.append(item)
 
-            self.artifacts_counts['Favicons'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -1621,9 +1594,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Bounce tracking items from {database}:')
 
-        conn = self._open(path, database, count_key='Bounce Tracking')
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -1634,8 +1607,7 @@ class Firefox(WebBrowser):
                 )
             except Exception as e:
                 log.error(f' - Could not query bounce-tracking state: {e}')
-                self.artifacts_counts['Bounce Tracking'] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
@@ -1662,9 +1634,8 @@ class Firefox(WebBrowser):
                 item.source_item = source_item
                 results.append(item)
 
-            self.artifacts_counts['Bounce Tracking'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -1673,9 +1644,9 @@ class Firefox(WebBrowser):
         results = []
         log.info(f'Content-blocking items from {database}:')
 
-        conn = self._open(path, database, count_key='Content Blocking')
+        conn = self._open(path, database)
         if not conn:
-            return
+            return None
 
         try:
             cursor = conn.cursor()
@@ -1683,8 +1654,7 @@ class Firefox(WebBrowser):
                 cursor.execute("SELECT type, count, timestamp FROM events")
             except Exception as e:
                 log.error(f' - Could not query content-blocking events: {e}')
-                self.artifacts_counts['Content Blocking'] = 'Failed'
-                return
+                return None
 
             source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
@@ -1717,9 +1687,8 @@ class Firefox(WebBrowser):
                 item.source_item = source_item
                 results.append(item)
 
-            self.artifacts_counts['Content Blocking'] = len(results)
-            log.info(f' - Parsed {len(results)} items')
             self.parsed_artifacts.extend(results)
+            return len(results)
         finally:
             conn.close()
 
@@ -2093,8 +2062,7 @@ class Firefox(WebBrowser):
             names = os.listdir(cache_entries_dir)
         except OSError as e:
             log.error(f' - Could not read cache directory: {e}')
-            self.artifacts_counts['Cache'] = 'Failed'
-            return
+            return None
 
         source_item = os.path.relpath(cache_entries_dir, self.profile_path) \
             if cache_entries_dir.startswith(self.profile_path) else cache_entries_dir
@@ -2187,11 +2155,9 @@ class Firefox(WebBrowser):
                     f'{n} {state}' for state, n in
                     sorted(recovery_counts.items(), key=lambda kv: -kv[1]))
                 log.info(f'   - Recovery breakdown: {breakdown}')
-        else:
-            log.info(f' - Parsed {len(results)} items')
 
-        self.artifacts_counts['Cache'] = len(results)
         self.parsed_artifacts.extend(results)
+        return len(results)
 
     @staticmethod
     def _decode_origin_folder(name):
@@ -2228,12 +2194,12 @@ class Firefox(WebBrowser):
         log.info(f'localStorage from {storage_root}:')
         if not os.path.isdir(storage_root):
             log.info(' - storage/default not present')
-            return
+            return 0
 
         results = []
+        unparsed = ParseFailures('Local Storage')
         origins_seen = 0
         origins_with_data = 0
-        decode_failures = 0
 
         for origin_folder in sorted(os.listdir(storage_root)):
             ls_dir = os.path.join(storage_root, origin_folder, 'ls')
@@ -2244,6 +2210,8 @@ class Firefox(WebBrowser):
 
             conn = utils.open_sqlite_db(self, ls_dir, 'data.sqlite')
             if not conn:
+                unparsed.source(f'{origin_folder}/ls/data.sqlite',
+                              self.describe_open_failure())
                 continue
 
             try:
@@ -2264,7 +2232,8 @@ class Firefox(WebBrowser):
                         "FROM data"
                     )
                 except Exception as e:
-                    log.debug(f' - {origin_folder}: data table unreadable ({e})')
+                    unparsed.source(f'{origin_folder}/ls/data.sqlite',
+                                  f'data table unreadable ({e})')
                     continue
 
                 source_path = os.path.relpath(ls_db, self.profile_path)
@@ -2276,9 +2245,9 @@ class Firefox(WebBrowser):
                     except StopIteration:
                         break
                     except Exception as e:
-                        log.warning(
-                            f' - {origin_folder}: localStorage db unreadable, '
-                            f'skipping remaining rows ({e})')
+                        unparsed.source(f'{origin_folder}/ls/data.sqlite',
+                                      f'unreadable partway through; remaining rows '
+                                      f'not enumerated ({e})')
                         break
                     key = row.get('key') or ''
                     conv = row.get('conversion_type') or 0
@@ -2288,8 +2257,7 @@ class Firefox(WebBrowser):
                         value = self._decode_ls_value(
                             raw_value, conv, comp, source_path)
                     except Exception as e:
-                        log.debug(f' - decode failed in {origin_folder}/{key}: {e}')
-                        decode_failures += 1
+                        unparsed.record(f'{origin_folder}/{key}', f'decode failed ({e})')
                         continue
 
                     last_access_raw = row.get('last_access_time') or 0
@@ -2325,19 +2293,12 @@ class Firefox(WebBrowser):
             finally:
                 conn.close()
 
-        self.artifacts_counts['Local Storage'] = len(results)
-        if decode_failures:
-            log.info(
-                f' - Parsed {len(results)} records from {origins_with_data} '
-                f'origins ({origins_seen} scanned, {decode_failures} decode '
-                f'failures)'
-            )
-        else:
-            log.info(
-                f' - Parsed {len(results)} records from {origins_with_data} '
-                f'origins ({origins_seen} scanned)'
-            )
+        log.info(
+            f' - Parsed {len(results)} records from {origins_with_data} '
+            f'origins ({origins_seen} scanned)'
+        )
         self.parsed_storage.extend(results)
+        return unparsed.result(len(results))
 
     # SCTAG values from mozilla-central/js/src/vm/StructuredClone.cpp StructuredDataType.
     # Tags below SCTAG_HEADER (0xFFF10000) are doubles encoded as their 64-bit IEEE bits.
@@ -2654,9 +2615,10 @@ class Firefox(WebBrowser):
         log.info(f'IndexedDB from {storage_root}:')
         if not os.path.isdir(storage_root):
             log.info(' - storage/default not present')
-            return
+            return 0
 
         results = []
+        unparsed = ParseFailures('IndexedDB')
         idb_files_seen = 0
         idb_files_with_data = 0
         decode_failures = 0
@@ -2673,6 +2635,7 @@ class Firefox(WebBrowser):
 
                 conn = utils.open_sqlite_db(self, idb_dir, db_filename)
                 if not conn:
+                    unparsed.source(db_filename, self.describe_open_failure())
                     continue
 
                 try:
@@ -2703,7 +2666,7 @@ class Firefox(WebBrowser):
                         cursor.execute(
                             'SELECT object_store_id, key, data FROM object_data')
                     except Exception as e:
-                        log.debug(f' - {db_filename}: object_data unreadable ({e})')
+                        unparsed.source(db_filename, f'object_data unreadable ({e})')
                         continue
 
                     source_path = os.path.relpath(
@@ -2728,6 +2691,8 @@ class Firefox(WebBrowser):
                                 value_str = self._stringify_idb_value(value_obj)
                             except Exception as e:
                                 decode_failures += 1
+                                unparsed.record(f'{db_filename}:{key_str}',
+                                              f'value decode failed ({e})')
                                 value_str = f'<decode failed: {e}>'
                         else:
                             empty_blobs += 1
@@ -2749,13 +2714,13 @@ class Firefox(WebBrowser):
                 finally:
                     conn.close()
 
-        self.artifacts_counts['IndexedDB'] = len(results)
         log.info(
             f' - Parsed {len(results)} records from {idb_files_with_data} '
             f'IndexedDB files ({idb_files_seen} scanned, '
             f'{decode_failures} decode failures, {empty_blobs} empty blobs)'
         )
         self.parsed_storage.extend(results)
+        return unparsed.result(len(results))
 
     def get_cache_storage(self, path):
         # Cache API (JS-visible, used by Service Workers) is distinct from cache2.
@@ -2765,9 +2730,10 @@ class Firefox(WebBrowser):
         log.info(f'Cache API storage from {storage_root}:')
         if not os.path.isdir(storage_root):
             log.info(' - storage/default not present')
-            return
+            return 0
 
         results = []
+        unparsed = ParseFailures('Cache API')
         origins_seen = 0
         origins_with_data = 0
         missing_bodies = 0
@@ -2782,6 +2748,8 @@ class Firefox(WebBrowser):
 
             conn = utils.open_sqlite_db(self, cache_dir, 'caches.sqlite')
             if not conn:
+                unparsed.source(f'{origin_folder}/cache/caches.sqlite',
+                              self.describe_open_failure())
                 continue
 
             try:
@@ -2828,7 +2796,8 @@ class Firefox(WebBrowser):
                         'FROM entries'
                     )
                 except Exception as e:
-                    log.debug(f' - {origin_folder}: entries unreadable ({e})')
+                    unparsed.source(f'{origin_folder}/cache/caches.sqlite',
+                                  f'entries unreadable ({e})')
                     continue
 
                 source_item = os.path.relpath(db_file, self.profile_path)
@@ -2931,13 +2900,13 @@ class Firefox(WebBrowser):
             finally:
                 conn.close()
 
-        self.artifacts_counts['Cache API'] = len(results)
         log.info(
             f' - Parsed {len(results)} entries from {origins_with_data} '
             f'origins ({origins_seen} scanned, {missing_bodies} bodies '
             f'missing from morgue)'
         )
         self.parsed_artifacts.extend(results)
+        return unparsed.result(len(results))
 
     def process(self):
         try:
@@ -2967,47 +2936,47 @@ class Firefox(WebBrowser):
                 driver.run(
                     'URL records', 'places.sqlite', self.get_history,
                     self.profile_path, 'places.sqlite',
-                    display_key='places.sqlite', display_value='URL records',
+                    display_value='URL records',
                     artifact='history')
 
                 driver.run(
                     'Download records', 'places.sqlite_downloads', self.get_downloads,
                     self.profile_path, 'places.sqlite',
-                    display_key='places.sqlite_downloads', display_value='Download records',
+                    display_value='Download records',
                     artifact='downloads')
 
                 driver.run(
                     'Bookmark records', 'Bookmarks', self.get_bookmarks,
                     self.profile_path, 'places.sqlite',
-                    display_key='Bookmarks', display_value='Bookmark records',
+                    display_value='Bookmark records',
                     artifact='bookmarks')
 
             if 'formhistory.sqlite' in input_listing:
                 driver.run(
                     'Form history records', 'formhistory.sqlite', self.get_form_history,
                     self.profile_path, 'formhistory.sqlite',
-                    display_key='formhistory.sqlite', display_value='Form history records',
+                    display_value='Form history records',
                     artifact='autofill')
 
             if 'sessionstore.jsonlz4' in input_listing or 'sessionstore-backups' in input_listing:
                 driver.run(
                     'Session (tab) records', 'Sessions', self.get_sessionstore,
                     self.profile_path,
-                    display_key='Sessions', display_value='Session (tab) records',
+                    display_value='Session (tab) records',
                     artifact='sessions')
 
             if 'bookmarkbackups' in input_listing:
                 driver.run(
                     'Bookmark backup records', 'Bookmark Backups', self.get_bookmark_backups,
                     self.profile_path,
-                    display_key='Bookmark Backups', display_value='Bookmark backup records',
+                    display_value='Bookmark backup records',
                     artifact='bookmark-backups')
 
             if 'favicons.sqlite' in input_listing:
                 driver.run(
                     'Favicon-derived URL records', 'Favicons', self.get_favicons,
                     self.profile_path, 'favicons.sqlite',
-                    display_key='Favicons', display_value='Favicon-derived URL records',
+                    display_value='Favicon-derived URL records',
                     artifact='favicons')
 
             # Website Storage
@@ -3016,7 +2985,7 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Cookie records', 'Cookies', self.get_cookies,
                     self.profile_path, 'cookies.sqlite',
-                    display_key='Cookies', display_value='Cookie records',
+                    display_value='Cookie records',
                     artifact='cookies')
 
             if 'storage' in input_listing and os.path.isdir(
@@ -3024,19 +2993,19 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Local Storage records', 'Local Storage', self.get_local_storage,
                     self.profile_path,
-                    display_key='Local Storage', display_value='Local Storage records',
+                    display_value='Local Storage records',
                     artifact='local-storage')
 
                 driver.run(
                     'IndexedDB records', 'IndexedDB', self.get_indexeddb,
                     self.profile_path,
-                    display_key='IndexedDB', display_value='IndexedDB records',
+                    display_value='IndexedDB records',
                     artifact='indexeddb')
 
                 driver.run(
                     'Cache API records', 'Cache API', self.get_cache_storage,
                     self.profile_path,
-                    display_key='Cache API', display_value='Cache API records',
+                    display_value='Cache API records',
                     artifact='cache-api')
 
             cache_dir = self._resolve_cache_dir()
@@ -3044,7 +3013,7 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Cache records', 'Cache', self.get_cache,
                     cache_dir,
-                    display_key='Cache', display_value='Cache records',
+                    display_value='Cache records',
                     artifact='cache')
             else:
                 log.info('No Firefox cache2 directory found; skipping cache parse.')
@@ -3055,7 +3024,7 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Installed Extensions', 'Extensions', self.get_extensions,
                     self.profile_path, 'extensions.json',
-                    display_key='Extensions', display_value='Installed Extensions',
+                    display_value='Installed Extensions',
                     artifact='extensions')
 
             # Configuration & Supporting Data
@@ -3064,49 +3033,45 @@ class Firefox(WebBrowser):
                 driver.run(
                     'Preference items', 'Preferences', self.get_preferences,
                     self.profile_path, 'prefs.js',
-                    display_key='Preferences', display_value='Preference items',
+                    display_value='Preference items',
                     artifact='preferences')
 
             if 'permissions.sqlite' in input_listing:
                 driver.run(
                     'Permission records', 'Permissions', self.get_permissions,
                     self.profile_path, 'permissions.sqlite',
-                    display_key='Permissions', display_value='Permission records',
+                    display_value='Permission records',
                     artifact='permissions')
 
             if 'SiteSecurityServiceState.bin' in input_listing:
                 driver.run(
                     'HSTS records', 'HSTS', self.get_hsts,
                     self.profile_path, 'SiteSecurityServiceState.bin',
-                    display_key='HSTS', display_value='HSTS records',
+                    display_value='HSTS records',
                     artifact='hsts')
 
             if 'logins.json' in input_listing:
                 driver.run(
                     'Saved login records', 'Logins', self.get_logins,
                     self.profile_path, 'logins.json',
-                    display_key='Logins', display_value='Saved login records',
+                    display_value='Saved login records',
                     artifact='logins')
 
             if 'bounce-tracking-protection.sqlite' in input_listing:
                 driver.run(
                     'Bounce-tracking records', 'Bounce Tracking', self.get_bounce_tracking,
                     self.profile_path, 'bounce-tracking-protection.sqlite',
-                    display_key='Bounce Tracking', display_value='Bounce-tracking records',
+                    display_value='Bounce-tracking records',
                     artifact='bounce-tracking')
 
             if 'protections.sqlite' in input_listing:
                 driver.run(
                     'Content-blocking event records', 'Content Blocking', self.get_content_blocking,
                     self.profile_path, 'protections.sqlite',
-                    display_key='Content Blocking', display_value='Content-blocking event records',
+                    display_value='Content-blocking event records',
                     artifact='content-blocking')
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
-
-        # Split parse failures out of the record counts now that the live display has
-        # finished reading them.
-        self.finalize_artifact_status()
 
     class URLItem(WebBrowser.URLItem):
         pass
