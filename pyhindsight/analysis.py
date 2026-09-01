@@ -142,7 +142,7 @@ class HindsightEncoder(json.JSONEncoder):
             item['data_type'] = 'chrome:history:page_visited'
             item['url_hidden'] = 'true' if item.get('hidden') else 'false'
             if item.get('visit_duration') == 'None':
-                del (item['visit_duration'])
+                item.pop('visit_duration', None)
 
             # .get() throughout: base_encoder drops keys whose value is None, so a page
             # the browser recorded without a title would raise KeyError here -- and that
@@ -165,12 +165,12 @@ class HindsightEncoder(json.JSONEncoder):
             item['data_type'] = 'chrome:history:media_playback'
 
             if item.get('source_title'):
-                item['message'] = f"Watched{item['watch_time']} on {item['source_title']} "\
-                                  f"(ending at {item['position']}/{item.get('media_duration')}) " \
-                                  f"[has_video: {item['has_video']}; has_audio: {item['has_audio']}]"
+                item['message'] = f"Watched{item.get('watch_time')} on {item.get('source_title')} "\
+                                  f"(ending at {item.get('position')}/{item.get('media_duration')}) " \
+                                  f"[has_video: {item.get('has_video')}; has_audio: {item.get('has_audio')}]"
             else:
-                item['message'] = f"Watched{item['watch_time']} on {item['url']} " \
-                                  f"[has_video: {item['has_video']}; has_audio: {item['has_audio']}]"
+                item['message'] = f"Watched{item.get('watch_time')} on {item.get('url')} " \
+                                  f"[has_video: {item.get('has_video')}; has_audio: {item.get('has_audio')}]"
 
             return item
 
@@ -193,8 +193,8 @@ class HindsightEncoder(json.JSONEncoder):
                 item['message'] = f"{item.get('url', '')} ({item.get('title', '')})"
 
             # Serialize page_state as structured JSON for JSONL output
-            if item.get('page_state') and item['page_state'].top_frame:
-                ps = item['page_state']
+            if item.get('page_state') and item.get('page_state').top_frame:
+                ps = item.get('page_state')
                 tf = ps.top_frame
                 ps_dict = {'version': ps.version}
 
@@ -245,9 +245,10 @@ class HindsightEncoder(json.JSONEncoder):
                 ps_dict['top_frame'] = frame_dict
                 item['page_state'] = ps_dict
             elif 'page_state' in item:
-                del item['page_state']
+                item.pop('page_state', None)
 
-            del(item['row_type'], item['name'])
+            for _key in ('row_type', 'name'):
+                item.pop(_key, None)
             return item
 
         if isinstance(obj, WebBrowser.DownloadItem):
@@ -286,27 +287,30 @@ class HindsightEncoder(json.JSONEncoder):
 
             item['data_type'] = 'chrome:cookie:entry'
             item['source_long'] = 'Chrome Cookies'
-            if item['row_type'] == 'cookie (accessed)':
+            if item.get('row_type') == 'cookie (accessed)':
                 item['timestamp_desc'] = 'Last Access Time'
-            elif item['row_type'] == 'cookie (created)':
+            elif item.get('row_type') == 'cookie (created)':
                 item['timestamp_desc'] = 'Creation Time'
-            item['host'] = item['host_key']
-            item['cookie_name'] = item['name']
-            item['data'] = item['value'] if item['value'] != '<encrypted>' else ''
-            item['url'] = item['url'].lstrip('.')
-            item['url'] = f'https://{item["url"]}' if item['secure'] else f'http://{item["url"]}'
+            item['host'] = item.get('host_key')
+            item['cookie_name'] = item.get('name')
+            item['data'] = item.get('value') if item.get('value') != '<encrypted>' else ''
+            # `or ''` rather than just .get(): a cookie row with no host would make
+            # .get() return None and .lstrip() raise, which is the same whole-file
+            # failure as the KeyError, just with a different name.
+            item['url'] = (item.get('url') or '').lstrip('.')
+            item['url'] = f'https://{item["url"]}' if item.get('secure') else f'http://{item["url"]}'
             if item.get('expires_utc') == '1970-01-01T00:00:00+00:00':
-                del(item['expires_utc'])
+                item.pop('expires_utc', None)
             # Convert these from 1/0 to true/false to match Plaso
-            item['secure'] = 'true' if item['secure'] else 'false'
-            item['httponly'] = 'true' if item['httponly'] else 'false'
-            item['persistent'] = 'true' if item['persistent'] else 'false'
+            item['secure'] = 'true' if item.get('secure') else 'false'
+            item['httponly'] = 'true' if item.get('httponly') else 'false'
+            item['persistent'] = 'true' if item.get('persistent') else 'false'
 
             item['message'] = (f'{item["url"]} ({item["cookie_name"]}) Flags: [HTTP only] = {item["httponly"]} '
                                f'[Persistent] = {item["persistent"]}')
 
-            del(item['creation_utc'], item['last_access_utc'], item['row_type'],
-                item['host_key'], item['name'], item['value'])
+            for _key in ('creation_utc', 'last_access_utc', 'row_type', 'host_key', 'name', 'value'):
+                item.pop(_key, None)
             return item
 
         if isinstance(obj, Chrome.AutofillItem):
@@ -331,9 +335,10 @@ class HindsightEncoder(json.JSONEncoder):
             item['data_type'] = 'chrome:bookmark:entry'
             item['source_long'] = 'Chrome Bookmarks'
 
-            item['message'] = f'{item["name"]} ({item["url"]}) bookmarked in folder "{item["parent_folder"]}"'
+            item['message'] = f'{item.get("name")} ({item.get("url")}) bookmarked in folder "{item.get("parent_folder")}"'
 
-            del(item['value'], item['row_type'], item['date_added'])
+            for _key in ('value', 'row_type', 'date_added'):
+                item.pop(_key, None)
             return item
 
         if isinstance(obj, Chrome.BookmarkFolderItem):
@@ -343,9 +348,10 @@ class HindsightEncoder(json.JSONEncoder):
             item['data_type'] = 'chrome:bookmark:folder'
             item['source_long'] = 'Chrome Bookmarks'
 
-            item['message'] = f'"{item["name"]}" bookmark folder created in folder "{item["parent_folder"]}"'
+            item['message'] = f'"{item.get("name")}" bookmark folder created in folder "{item.get("parent_folder")}"'
 
-            del(item['value'], item['row_type'], item['date_added'])
+            for _key in ('value', 'row_type', 'date_added'):
+                item.pop(_key, None)
             return item
 
         if isinstance(obj, Chrome.LocalStorageItem):
@@ -354,13 +360,15 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Not a time'
             item['data_type'] = 'chrome:local_storage:entry'
             item['source_long'] = 'Chrome LocalStorage'
-            item['url'] = item['origin'][1:]
+            # `or ''` rather than just .get(): slicing None raises, which fails the
+            # whole JSONL file the same way the KeyError did, only with another name.
+            item['url'] = (item.get('origin') or '')[1:]
             item['state_friendly'] = item.get('state')
             item['state'] = 0 if item.get('state') == 'Deleted' else 1
 
-            item['message'] = f'key: {item["key"]} value: {item["value"]}'
+            item['message'] = f'key: {item.get("key")} value: {item.get("value")}'
 
-            del (item['row_type'])
+            item.pop('row_type', None)
             return item
 
         if isinstance(obj, Chrome.SessionStorageItem):
@@ -369,13 +377,13 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Not a time'
             item['data_type'] = 'chrome:session_storage:entry'
             item['source_long'] = 'Chrome Session Storage'
-            item['url'] = item['origin']
+            item['url'] = item.get('origin')
             item['state_friendly'] = item.get('state')
             item['state'] = 0 if item.get('state') == 'Deleted' else 1
 
             item['message'] = f'key: {item.get("key", "")} value: {item.get("value", "")}'
 
-            del (item['row_type'])
+            item.pop('row_type', None)
             return item
 
         if isinstance(obj, Chrome.IndexedDBItem):
@@ -384,7 +392,7 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Not a time'
             item['data_type'] = 'chrome:indexeddb:entry'
             item['source_long'] = 'Chrome IndexedDB'
-            item['url'] = item['origin']
+            item['url'] = item.get('origin')
             item['state_friendly'] = item.get('state')
             item['state'] = 0 if item.get('state') == 'Deleted' else 1
 
@@ -394,7 +402,7 @@ class HindsightEncoder(json.JSONEncoder):
                 f'value: {item.get("value", "")}'
             )
 
-            del (item['row_type'])
+            item.pop('row_type', None)
             return item
 
         if isinstance(obj, Chrome.FileSystemItem):
@@ -403,13 +411,13 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Not a time'
             item['data_type'] = 'chrome:file_system:entry'
             item['source_long'] = 'Chrome File System'
-            item['url'] = item['origin']
+            item['url'] = item.get('origin')
             item['state_friendly'] = item.get('state')
             item['state'] = 0 if item.get('state') == 'Deleted' else 1
 
-            item['message'] = f'key: {item["key"]} value: {item["value"]}'
+            item['message'] = f'key: {item.get("key")} value: {item.get("value")}'
 
-            del (item['row_type'])
+            item.pop('row_type', None)
             return item
 
         if isinstance(obj, Chrome.LoginItem):
@@ -432,9 +440,10 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Update Time'
             item['data_type'] = 'chrome:preferences:entry'
             item['source_long'] = 'Chrome Preferences'
-            item['message'] = f'Updated preference: {item["key"]}: {item["value"]})'
+            item['message'] = f'Updated preference: {item.get("key")}: {item.get("value")})'
 
-            del(item['row_type'], item['name'])
+            for _key in ('row_type', 'name'):
+                item.pop(_key, None)
             return item
 
         if isinstance(obj, Chrome.ExtensionStorageItem):
@@ -453,7 +462,7 @@ class HindsightEncoder(json.JSONEncoder):
                 f'value: {item.get("value", "")}'
             )
 
-            del (item['row_type'])
+            item.pop('row_type', None)
             return item
 
         if isinstance(obj, Chrome.SyncDataItem):
@@ -467,13 +476,13 @@ class HindsightEncoder(json.JSONEncoder):
 
             item['message'] = f'key: {item.get("key", "")} value: {item.get("value", "")}'
 
-            del (item['row_type'])
+            item.pop('row_type', None)
             return item
 
         if isinstance(obj, Chrome.SiteSetting):
             item = HindsightEncoder.base_encoder(obj)
 
-            if item['key'] == 'Status: Deleted':
+            if item.get('key') == 'Status: Deleted':
                 item['timestamp_desc'] = 'Not a time'
             else:
                 item['timestamp_desc'] = 'Update Time'
@@ -481,12 +490,13 @@ class HindsightEncoder(json.JSONEncoder):
             item['data_type'] = 'chrome:site_setting:entry'
             item['source_long'] = 'Chrome Site Settings'
 
-            if item['key'] == 'Status: Deleted':
+            if item.get('key') == 'Status: Deleted':
                 item['message'] = 'Updated site setting (recovered deleted record)'
             else:
-                item['message'] = f'Updated site setting: {item["key"]}: {item["value"]})'
+                item['message'] = f'Updated site setting: {item.get("key")}: {item.get("value")})'
 
-            del(item['row_type'], item['name'])
+            for _key in ('row_type', 'name'):
+                item.pop(_key, None)
             return item
 
         if isinstance(obj, WebBrowser.ServiceWorkerItem):
@@ -510,9 +520,9 @@ class HindsightEncoder(json.JSONEncoder):
             # all, which is why it is appended rather than embedded.
             message = f"resource {item.get('resource_id', '')}"
             if item.get('resource_state'):
-                message += f" ({item['resource_state']})"
+                message += f" ({item.get('resource_state')})"
             if item.get('origin'):
-                message += f" for {item['origin']}"
+                message += f" for {item.get('origin')}"
             item['message'] = message
             item.pop('row_type', None)
             return item
@@ -560,10 +570,10 @@ class HindsightEncoder(json.JSONEncoder):
                 'Last Visit Time' if obj.timestamp is not None else 'Not a time'
             item['data_type'] = 'chrome:cache:entry'
             item['source_long'] = 'Chrome Cache'
-            item['original_url'] = item['url']
-            item['cache_type'] = item['row_type']
+            item['original_url'] = item.get('url')
+            item['cache_type'] = item.get('row_type')
 
-            if item['data_summary'] == '<no data>':
+            if item.get('data_summary') == '<no data>':
                 item['cached_state'] = 'Evicted'
             else:
                 item['cached_state'] = 'Cached'
@@ -571,9 +581,9 @@ class HindsightEncoder(json.JSONEncoder):
             item['message'] = f'Original URL: {item["original_url"]}'
 
             if item.get('data'):
-                del item['data']
+                item.pop('data', None)
 
-            del item['row_type']
+            item.pop('row_type', None)
             return item
 
         # No branch matched. Emitting the record generically beats dropping it: a

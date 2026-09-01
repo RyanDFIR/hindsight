@@ -136,6 +136,59 @@ class TestServiceWorkerRecords(unittest.TestCase):
         self.assertFalse(encoded['message'].rstrip().endswith('for'))
 
 
+class TestEncoderToleratesMissingOptionalFields(unittest.TestCase):
+    """No branch may index a field the record might not have.
+
+    base_encoder drops keys whose value is None, so a record that didn't record an
+    optional field arrives without that key. Indexing it raises KeyError, and that
+    escapes write_jsonl_record and aborts the *whole* JSONL file -- every remaining
+    record lost, not the one that was odd. Realistic triggers: a visited page with a
+    NULL title, or Firefox formhistory on a schema with no timesUsed.
+    """
+
+    def _minimal(self, owner, name, row_type):
+        """A record carrying only what every record has -- nothing optional."""
+        cls = getattr(owner, name)
+        obj = cls.__new__(cls)
+        obj.__dict__.update(profile='p', row_type=row_type, timestamp=REF)
+        return obj
+
+    def _record_classes(self):
+        for owner in (WebBrowser, Chrome, Firefox):
+            for name in sorted(dir(owner)):
+                if not name.endswith(('Item', 'Setting', 'Extension')):
+                    continue
+                cls = getattr(owner, name)
+                if isinstance(cls, type):
+                    yield owner, name, cls
+
+    def test_no_branch_raises_on_a_record_with_only_required_fields(self):
+        failures = []
+        for owner, name, _cls in self._record_classes():
+            obj = self._minimal(owner, name, 'test')
+            try:
+                json.dumps(obj, cls=HindsightEncoder)
+            except Exception as exc:
+                failures.append(f'{owner.__name__}.{name}: '
+                                f'{type(exc).__name__}: {exc}')
+        self.assertEqual([], failures, '\n' + '\n'.join(failures))
+
+    def test_a_visited_page_with_no_title_still_encodes(self):
+        # The concrete case: Chrome/Firefox both record NULL titles.
+        item = Chrome.URLItem.__new__(Chrome.URLItem)
+        item.__dict__.update(profile='p', row_type='url', timestamp=REF,
+                             url='https://example.com', title=None, visit_count=1)
+        encoded = encode(item)
+        self.assertEqual('chrome:history:page_visited', encoded['data_type'])
+        self.assertIn('example.com', encoded['message'])
+
+    def test_a_cookie_with_no_host_still_encodes(self):
+        item = Chrome.CookieItem.__new__(Chrome.CookieItem)
+        item.__dict__.update(profile='p', row_type='cookie (created)', timestamp=REF)
+        encoded = encode(item)
+        self.assertEqual('chrome:cookie:entry', encoded['data_type'])
+
+
 class TestUnhandledRecordsAreStillWritten(unittest.TestCase):
     """An unknown class is written generically, not dropped.
 
