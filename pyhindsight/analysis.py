@@ -2,6 +2,7 @@ import datetime
 import importlib
 import collections
 import json
+import re
 import logging
 import os
 import sqlite3
@@ -67,6 +68,40 @@ class HindsightEncoder(json.JSONEncoder):
     Timesketch (https://github.com/google/timesketch/).
     """
 
+    _warned_unhandled = set()
+
+    @classmethod
+    def warn_unhandled(cls, class_name, data_type):
+        """Warn once that a record class has no encoder branch of its own.
+
+        The record is still written, with fields as-is and a data_type derived from its
+        row_type, but nobody chose that shape deliberately -- so it says so rather than
+        looking like a considered format.
+        """
+        if class_name in cls._warned_unhandled:
+            return
+        cls._warned_unhandled.add(class_name)
+        log.warning(
+            f'{class_name} has no HindsightEncoder branch; its records are written '
+            f'generically as "{data_type}". Add a branch to control their shape.')
+
+    @staticmethod
+    def promote_timestamp(item, field, description):
+        """Use `field` as the record's datetime when it holds one.
+
+        These records carry their time in a field of their own rather than in
+        `timestamp`, so without this they all take base_encoder's epoch placeholder and
+        land in 1970. Where the field is absent the placeholder stands, labelled the way
+        the other timeless records are rather than asserting a 1970 event.
+        """
+        value = item.get(field)
+        if value:
+            item['datetime'] = value
+            item['timestamp_desc'] = description
+        else:
+            item['timestamp_desc'] = 'Not a time'
+        return item
+
     @staticmethod
     def base_encoder(history_item):
         item = {'source_short': 'WEBHIST', 'source_long': 'Chrome History',
@@ -100,19 +135,27 @@ class HindsightEncoder(json.JSONEncoder):
         return item
 
     def default(self, obj):
-        if isinstance(obj, Chrome.URLItem):
+        if isinstance(obj, WebBrowser.URLItem):
             item = HindsightEncoder.base_encoder(obj)
 
             item['timestamp_desc'] = 'Last Visited Time'
             item['data_type'] = 'chrome:history:page_visited'
-            item['url_hidden'] = 'true' if item['hidden'] else 'false'
+            item['url_hidden'] = 'true' if item.get('hidden') else 'false'
             if item.get('visit_duration') == 'None':
                 del (item['visit_duration'])
 
-            item['message'] = f"{item['url']} ({item['title']}) [count: {item['visit_count']}]"
+            # .get() throughout: base_encoder drops keys whose value is None, so a page
+            # the browser recorded without a title would raise KeyError here -- and that
+            # escapes write_jsonl_record and aborts the whole file, losing every
+            # remaining record rather than the one.
+            item['message'] = f"{item.get('url')} ({item.get('title')}) " \
+                              f"[count: {item.get('visit_count')}]"
 
-            del(item['name'], item['row_type'], item['visit_time'],
-                item['last_visit_time'], item['hidden'])
+            # base_encoder drops keys whose value is None, so these are only present on
+            # a browser that recorded them; deleting them unconditionally would raise on
+            # one that didn't.
+            for key in ('name', 'row_type', 'visit_time', 'last_visit_time', 'hidden'):
+                item.pop(key, None)
             return item
 
         if isinstance(obj, Chrome.MediaItem):
@@ -207,18 +250,23 @@ class HindsightEncoder(json.JSONEncoder):
             del(item['row_type'], item['name'])
             return item
 
-        if isinstance(obj, Chrome.DownloadItem):
+        if isinstance(obj, WebBrowser.DownloadItem):
             item = HindsightEncoder.base_encoder(obj)
 
             item['timestamp_desc'] = 'Last Access Time' \
                 if '(opened)' in (getattr(obj, 'row_type', '') or '') else 'File Downloaded'
             item['data_type'] = 'chrome:history:file_downloaded'
 
-            item['message'] = f"{item['url']} " \
-                              f"({item['full_path'] if item.get('full_path') else item.get('target_path')}). " \
-                              f"Received {item['received_bytes']}/{item['total_bytes']} bytes"
+            item['message'] = f"{item.get('url')} " \
+                              f"({item.get('full_path') or item.get('target_path')})"
+            # Firefox's places.sqlite has no byte counts, and base_encoder drops None,
+            # so this is only appended when the browser actually recorded them.
+            if item.get('received_bytes') is not None or item.get('total_bytes') is not None:
+                item['message'] += (f". Received {item.get('received_bytes')}"
+                                    f"/{item.get('total_bytes')} bytes")
 
-            del(item['row_type'], item['start_time'])
+            for key in ('row_type', 'start_time'):
+                item.pop(key, None)
             return item
 
         if isinstance(obj, Chrome.BrowserExtension):
@@ -267,12 +315,13 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Used Time'
             item['data_type'] = 'chrome:autofill:entry'
             item['source_long'] = 'Chrome Autofill'
-            item['usage_count'] = item['count']
-            item['field_name'] = item['name']
+            item['usage_count'] = item.get('count')
+            item['field_name'] = item.get('name')
 
-            item['message'] = f'{item["field_name"]}: {item["value"]} (times used: {item["usage_count"]})'
+            item['message'] = f'{item["field_name"]}: {item.get("value")} '                               f'(times used: {item["usage_count"]})'
 
-            del(item['name'], item['row_type'], item['count'], item['date_created'])
+            for key in ('name', 'row_type', 'count', 'date_created'):
+                item.pop(key, None)
             return item
 
         if isinstance(obj, Chrome.BookmarkItem):
@@ -369,11 +418,12 @@ class HindsightEncoder(json.JSONEncoder):
             item['timestamp_desc'] = 'Used Time'
             item['data_type'] = 'chrome:login_item:entry'
             item['source_long'] = 'Chrome Logins'
-            item['usage_count'] = item['count']
+            item['usage_count'] = item.get('count')
 
-            item['message'] = f'{item["name"]}: {item["value"]} used on {item["url"]} (total times used: {item["usage_count"]})'
+            item['message'] = f'{item.get("name")}: {item.get("value")} used on '                               f'{item.get("url")} (total times used: {item["usage_count"]})'
 
-            del (item['row_type'], item['count'], item['date_created'])
+            for key in ('row_type', 'count', 'date_created'):
+                item.pop(key, None)
             return item
 
         if isinstance(obj, Chrome.PreferenceItem):
@@ -439,6 +489,66 @@ class HindsightEncoder(json.JSONEncoder):
             del(item['row_type'], item['name'])
             return item
 
+        if isinstance(obj, WebBrowser.ServiceWorkerItem):
+            item = HindsightEncoder.base_encoder(obj)
+            item['source_long'] = 'Chrome Service Workers'
+            item['data_type'] = 'chrome:service_worker:registration'
+            HindsightEncoder.promote_timestamp(
+                item, 'last_modified', 'Registration Last Modified')
+            item['message'] = (f"{item.get('scope_url', '')} "
+                               f"(script: {item.get('script_url', '')})")
+            item.pop('row_type', None)
+            return item
+
+        if isinstance(obj, WebBrowser.ServiceWorkerResourceItem):
+            item = HindsightEncoder.base_encoder(obj)
+            item['source_long'] = 'Chrome Service Workers'
+            item['data_type'] = 'chrome:service_worker:resource'
+            item['timestamp_desc'] = 'Not a time'
+            # A purgeable resource is one the browser has orphaned from its
+            # registration, so the state is worth stating; and ~1% have no origin at
+            # all, which is why it is appended rather than embedded.
+            message = f"resource {item.get('resource_id', '')}"
+            if item.get('resource_state'):
+                message += f" ({item['resource_state']})"
+            if item.get('origin'):
+                message += f" for {item['origin']}"
+            item['message'] = message
+            item.pop('row_type', None)
+            return item
+
+        if isinstance(obj, WebBrowser.ServiceWorkerScriptItem):
+            item = HindsightEncoder.base_encoder(obj)
+            item['source_long'] = 'Chrome Service Workers'
+            item['data_type'] = 'chrome:service_worker:script'
+            HindsightEncoder.promote_timestamp(
+                item, 'response_time', 'Script Response Time')
+            item['message'] = (f"{item.get('url', '')} "
+                               f"({item.get('content_type', '')}, "
+                               f"{item.get('body_size', '')} bytes)")
+            item.pop('row_type', None)
+            return item
+
+        if isinstance(obj, WebBrowser.ServiceWorkerCacheStorageItem):
+            item = HindsightEncoder.base_encoder(obj)
+            item['source_long'] = 'Chrome Service Workers'
+            item['data_type'] = 'chrome:service_worker:cache_entry'
+            HindsightEncoder.promote_timestamp(item, 'entry_time', 'Cache Entry Time')
+            item['message'] = (f"{item.get('request_url', '')} "
+                               f"(cache: {item.get('cache_name', '')})")
+            item.pop('row_type', None)
+            return item
+
+        if isinstance(obj, WebBrowser.ServiceWorkerUserDataItem):
+            item = HindsightEncoder.base_encoder(obj)
+            item['source_long'] = 'Chrome Service Workers'
+            item['data_type'] = 'chrome:service_worker:user_data'
+            item['timestamp_desc'] = 'Not a time'
+            item['message'] = (f"{item.get('user_data_key', '')} "
+                               f"for {item.get('scope_url', '') or item.get('origin', '')}")
+            item.pop('row_type', None)
+            return item
+
         if isinstance(obj, WebBrowser.CacheItem):
             item = HindsightEncoder.base_encoder(obj)
 
@@ -465,6 +575,20 @@ class HindsightEncoder(json.JSONEncoder):
 
             del item['row_type']
             return item
+
+        # No branch matched. Emitting the record generically beats dropping it: a
+        # dropped record is absent from the output while the run still counts it, so the
+        # report is short by an amount nothing states. This is how Service Worker data
+        # and Firefox history went missing from JSONL for as long as they did.
+        item = HindsightEncoder.base_encoder(obj)
+        row_type = item.get('row_type') or type(obj).__name__
+        item['data_type'] = 'hindsight:' + re.sub(
+            r'[^a-z0-9]+', '_', str(row_type).lower()).strip('_')
+        item.setdefault('timestamp_desc', 'Not a time')
+        item.setdefault('message', str(item.get('value', '')))
+        item.pop('row_type', None)
+        HindsightEncoder.warn_unhandled(type(obj).__name__, item['data_type'])
+        return item
 
 
 class AnalysisSession(object):
@@ -3073,6 +3197,7 @@ class AnalysisSession(object):
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
+            unhandled_storage = collections.Counter()
             for item in self.parsed_storage:
                 if item.row_type.startswith('local'):
                     c.execute(
@@ -3102,6 +3227,17 @@ class AnalysisSession(object):
                          state_to_int(item.state), item.state,
                          item.file_exists, item.file_size, item.magic_results))
 
+                elif item.row_type.startswith('service worker'):
+                    c.execute(
+                        'INSERT INTO storage (type, origin, key, value, modification_time, '
+                        'interpretation, profile, source_path, seq, state, state_friendly) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (item.row_type, getattr(item, 'origin', None), item.key, item.value,
+                         sql_date(getattr(item, 'last_modified', None)),
+                         getattr(item, 'interpretation', None), item.profile,
+                         item.source_path, getattr(item, 'seq', None),
+                         state_to_int(item.state), item.state))
+
                 elif item.row_type.startswith('indexed'):
                     c.execute(
                         'INSERT INTO storage (type, origin, key, value, '
@@ -3109,6 +3245,15 @@ class AnalysisSession(object):
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, item.origin, item.key, item.value, item.interpretation, item.profile,
                          item.source_path, item.seq, state_to_int(item.state), item.state, item.database))
+
+                else:
+                    # Previously fell through with no branch and no message, which is
+                    # how every Service Worker row went missing from this table.
+                    unhandled_storage[item.row_type] += 1
+
+            for row_type, count in unhandled_storage.most_common():
+                log.error(f'{count} "{row_type}" record(s) are MISSING from the SQLite '
+                          f'storage table; no INSERT branch handles that row_type')
 
             for item in self.parsed_extension_data:
                 if item.row_type:
@@ -3242,7 +3387,7 @@ class AnalysisSession(object):
             if unparsed_count:
                 log.error(
                     f'{unparsed_count} record(s) could not be written to JSONL and are '
-                    f'MISSING from this output; HindsightEncoder has no branch for '
-                    f'their class:')
+                    f'MISSING from this output; HindsightEncoder returned nothing for '
+                    f'them, which it should no longer do for any class:')
                 for name, count in unparsed_types.most_common():
                     log.error(f'  - {count} x {name}')
