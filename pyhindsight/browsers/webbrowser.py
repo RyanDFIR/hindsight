@@ -223,7 +223,16 @@ class ProcessingDisplay:
         return self
 
     def __exit__(self, *exc_info):
-        return self._live.__exit__(*exc_info)
+        # Tearing the display down must never stand in for an exception that is
+        # already propagating. rich flushes buffered output here, and with stdout
+        # redirected on Windows that write can raise UnicodeEncodeError on the
+        # spinner glyphs, replacing the real traceback with a bogus one and sending
+        # anyone reading a CI log after the wrong bug.
+        try:
+            self._live.__exit__(*exc_info)
+        except Exception:
+            log.debug('Could not tear down the live progress display', exc_info=True)
+        return False
 
     def group(self, name):
         """Set the group subsequent run() calls are bucketed under."""

@@ -284,5 +284,49 @@ class TestDriverRecordsPartials(unittest.TestCase):
         self.assertIn('Parsed', self._run(412).console.file.getvalue())
 
 
+class TestDisplayTeardownNeverMasksTheRealError(unittest.TestCase):
+    """A failure closing the display must not stand in for the exception underneath.
+
+    rich flushes buffered output when the live display exits. With stdout redirected
+    on Windows that write can raise UnicodeEncodeError on the spinner's Braille
+    glyphs, and it used to replace whatever was already propagating. A run that died
+    on a parse error reported a bogus encoding error instead, which matters most in
+    CI, where stdout is always redirected and the log is all anyone sees.
+    """
+
+    class _ExplodingLive:
+        """Stands in for rich's Live once the console can no longer be written to."""
+
+        def __exit__(self, *exc_info):
+            raise UnicodeEncodeError(
+                'charmap', '⠦', 0, 1, 'character maps to <undefined>')
+
+    def _driver(self):
+        browser = WebBrowser('fixture-profile', 'Chrome')
+        browser.display_version = '999'
+        driver = ProcessingDisplay(browser, ['Group'])
+        driver.console = rich.console.Console(file=io.StringIO(), width=110)
+        return driver
+
+    def test_the_real_exception_survives_a_failing_teardown(self):
+        driver = self._driver()
+        with self.assertRaises(ValueError) as caught:
+            with driver:
+                driver._live = self._ExplodingLive()
+                raise ValueError('the parse failure that actually stopped the run')
+        self.assertIn('actually stopped the run', str(caught.exception))
+
+    def test_a_failing_teardown_alone_does_not_raise(self):
+        driver = self._driver()
+        with driver:
+            driver._live = self._ExplodingLive()
+
+    def test_a_clean_exit_does_not_swallow_an_exception(self):
+        driver = self._driver()
+        with self.assertRaises(ValueError):
+            with driver:
+                raise ValueError('must not be suppressed')
+
+
 if __name__ == '__main__':
     unittest.main()

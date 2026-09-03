@@ -106,7 +106,16 @@ class HindsightEncoder(json.JSONEncoder):
     def base_encoder(history_item):
         item = {'source_short': 'WEBHIST', 'source_long': 'Chrome History',
                 'parser': f'hindsight/{__version__}'}
-        for key, value in list(history_item.__dict__.items()):
+        fields = getattr(history_item, '__dict__', None)
+        if fields is None:
+            # Not a record object. Anything without a __dict__ reaching here used
+            # to raise AttributeError out of json.dumps, which loses every record
+            # still to be written rather than the one that was odd.
+            item['value'] = str(history_item)
+            item['datetime'] = '1970-01-01T00:00:00.000000+00:00'
+            return item
+
+        for key, value in list(fields.items()):
             # Drop any keys that have None as value
             if value is None:
                 continue
@@ -134,7 +143,49 @@ class HindsightEncoder(json.JSONEncoder):
 
         return item
 
+    @staticmethod
+    def json_safe(value):
+        """Coerce one field value into something json can write."""
+        if isinstance(value, datetime.datetime):
+            return value.isoformat()
+        if isinstance(value, (bytes, bytearray)):
+            return value.decode('utf-8', errors='replace')
+        return value
+
+    @staticmethod
+    def value_encoder(obj):
+        """Encode an object that is a field value rather than a record.
+
+        Only records carry the source/parser envelope. Giving one to a value made
+        ccl's CacheKey and CachedMetadata read as though each were its own history
+        record, nested inside the cache entry that owns them: source_long said
+        'Chrome History', datetime said 1970, and they carried a data_type and a
+        message of their own. Their field names leaked too, since a foreign class
+        names its internals with a leading underscore.
+        """
+        fields = getattr(obj, '__dict__', None)
+        if fields is not None:
+            return {str(key).lstrip('_'): HindsightEncoder.json_safe(value)
+                    for key, value in fields.items() if value is not None}
+
+        # Classes using __slots__ have no __dict__; several of ccl's are mappings
+        # or sequences, which str() would flatten into an unparseable repr.
+        if isinstance(obj, collections.abc.Mapping):
+            return {str(key).lstrip('_'): HindsightEncoder.json_safe(value)
+                    for key, value in obj.items()}
+        if (isinstance(obj, collections.abc.Sequence)
+                and not isinstance(obj, (str, bytes, bytearray))):
+            return [HindsightEncoder.json_safe(value) for value in obj]
+        return str(obj)
+
     def default(self, obj):
+        # json calls default() for every value it cannot serialise, not only for
+        # record objects, and it has no set type. ccl's CachedMetadata carries one
+        # in `_declarations`, which used to reach the object fallback below and take
+        # the entire file down with it. Sorted so two runs stay comparable.
+        if isinstance(obj, (set, frozenset)):
+            return sorted(obj, key=str)
+
         if isinstance(obj, WebBrowser.URLItem):
             item = HindsightEncoder.base_encoder(obj)
 
@@ -585,6 +636,12 @@ class HindsightEncoder(json.JSONEncoder):
 
             item.pop('row_type', None)
             return item
+
+        # Not a record at all: a foreign object sitting in a record's field. Records
+        # are the things that carry a row_type; every Hindsight item base sets one
+        # and no ccl class does.
+        if not hasattr(obj, 'row_type'):
+            return HindsightEncoder.value_encoder(obj)
 
         # No branch matched. Emitting the record generically beats dropping it: a
         # dropped record is absent from the output while the run still counts it, so the
