@@ -11,7 +11,7 @@ a = Analysis(['../hindsight_gui.py'],
              binaries=[],
              datas=[('../pyhindsight/plugins', 'plugins'), ('../hindsight.py', 'hindsight.py')],
              hiddenimports=[
-                "pycryptodome", "pyhindsight", "pyhindsight.plugins.chrome_extensions", "pyhindsight.plugins.dnr_rules",
+                "Cryptodome", "zstd", "pyhindsight", "pyhindsight.plugins.chrome_extensions", "pyhindsight.plugins.dnr_rules",
                 "pyhindsight.plugins.generic_timestamps", "pyhindsight.plugins.google_analytics",
                 "pyhindsight.plugins.google_searches", "pyhindsight.plugins.load_balancer_cookies",
                 "pyhindsight.plugins.quantcast_cookies", "pyhindsight.plugins.query_string_parser",

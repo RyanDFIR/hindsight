@@ -2,7 +2,6 @@ bottle>=0.12.18
 keyring>=21.2.1
 protobuf>=6.33.2
 puremagic~=1.11
-pycryptodome>=3.9.7
 pycryptodomex>=3.9.7
 pywin32>=306; sys_platform == "win32"
 setuptools>=65.5.1
