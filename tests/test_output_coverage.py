@@ -210,5 +210,109 @@ class TestUnhandledRecordsAreStillWritten(unittest.TestCase):
         self.assertIn('datetime', encoded)
 
 
+class TestOddValuesDoNotAbortTheFile(unittest.TestCase):
+    """json calls default() for values, not only for records.
+
+    The object fallback reads `obj.__dict__`, so a value without one raised
+    AttributeError out of json.dumps and killed the whole file. On one test profile
+    a single set on a ccl CachedMetadata record cost 8,492 of 12,293 records: every
+    cache entry, and the cookies, history and sessions that came after it.
+    """
+
+    def test_a_set_field_is_written_as_a_list(self):
+        class WithASet:
+            def __init__(self):
+                self.profile = 'p'
+                self.row_type = 'cache entry'
+                self.declarations = {'HTTP/1.1 200', 'HTTP/1.1 204'}
+                self.timestamp = REF
+
+        encoded = encode(WithASet())
+        self.assertEqual(['HTTP/1.1 200', 'HTTP/1.1 204'], encoded['declarations'])
+
+    def test_a_set_is_sorted_so_two_runs_can_be_compared(self):
+        self.assertEqual(['a', 'b', 'c'], encode({'c', 'a', 'b'}))
+
+    def test_a_frozenset_encodes_too(self):
+        self.assertEqual(['x', 'y'], encode(frozenset({'y', 'x'})))
+
+    def test_a_value_with_no_dict_does_not_raise(self):
+        class Slotted:
+            __slots__ = ('a',)
+
+            def __init__(self):
+                self.a = 1
+
+        # The record itself is ordinary; the odd value is nested inside it, which
+        # is how the real one arrived.
+        class Holder:
+            def __init__(self):
+                self.profile = 'p'
+                self.row_type = 'holder'
+                self.odd = Slotted()
+                self.timestamp = REF
+
+        encoded = encode(Holder())
+        self.assertIn('odd', encoded)
+
+
+class TestNestedValuesAreNotDressedUpAsRecords(unittest.TestCase):
+    """A foreign object in a record's field is a value, not a record of its own.
+
+    ccl's CacheKey and CachedMetadata hang off every cache entry. Encoding them
+    through the record path stamped each with source_long 'Chrome History', a 1970
+    datetime, its own data_type and an empty message, nested inside the entry that
+    owned them, and leaked their private field names verbatim. Records are the
+    things with a row_type; every Hindsight item base sets one and no ccl class does.
+    """
+
+    ENVELOPE = ('source_short', 'source_long', 'parser', 'data_type',
+                'timestamp_desc', 'datetime', 'message')
+
+    class _Foreign:
+        """Shaped like ccl's CacheKey: no row_type, private attribute names."""
+
+        def __init__(self):
+            self._url = 'https://example.test/a.svg'
+            self._isolation_key_top_frame_site = 'https://top.test'
+
+    def _record_with(self, value):
+        class Owner:
+            def __init__(self):
+                self.profile = 'p'
+                self.row_type = 'cache'
+                self.nested = value
+                self.timestamp = REF
+
+        return encode(Owner())['nested']
+
+    def test_a_nested_foreign_object_carries_no_envelope(self):
+        nested = self._record_with(self._Foreign())
+        for field in self.ENVELOPE:
+            with self.subTest(field=field):
+                self.assertNotIn(field, nested)
+
+    def test_private_field_names_are_presented_unprefixed(self):
+        nested = self._record_with(self._Foreign())
+        self.assertEqual('https://example.test/a.svg', nested['url'])
+        self.assertEqual('https://top.test', nested['isolation_key_top_frame_site'])
+
+    def test_a_nested_mapping_stays_a_mapping(self):
+        import types
+        nested = self._record_with(types.MappingProxyType({'server': ['sffe']}))
+        self.assertEqual({'server': ['sffe']}, nested)
+
+    def test_the_record_itself_keeps_its_envelope(self):
+        class Unknown:
+            def __init__(self):
+                self.profile = 'p'
+                self.row_type = 'brand new artifact'
+                self.timestamp = REF
+
+        encoded = encode(Unknown())
+        self.assertEqual('hindsight:brand_new_artifact', encoded['data_type'])
+        self.assertEqual('WEBHIST', encoded['source_short'])
+
+
 if __name__ == '__main__':
     unittest.main()
