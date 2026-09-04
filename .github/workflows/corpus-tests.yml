@@ -1,12 +1,18 @@
 # End-to-end parses of real browser profiles, compared to committed baselines.
 #
-# Deliberately not on the pull-request path. The unit suite in tests.yml is the gate on
-# every push; this is a regression net that needs several GB of profile data and minutes
-# rather than seconds, so it runs nightly and on demand.
+# Runs on every pull request, because a regression arrives with a commit and that is when
+# it is cheapest to find. A nightly schedule would only tell you something broke in the
+# last day and leave you to bisect for it, so there isn't one. Also on push to main, which
+# is not redundant with the pull-request run: merging a PR that was behind main produces a
+# commit no run has ever seen.
 #
 # Sharded one job per corpus root. That keeps each runner's disk to a single archive
 # rather than the whole 6 GB corpus, turns a failure into "magnet.ctf_2019 changed"
 # instead of one opaque red tick, and lets the roots run in parallel.
+#
+# No paths filter. Skipping doc-only pull requests would save bandwidth, but a filter that
+# is missing one file silently stops testing a real change, and a false green here is much
+# more expensive than a few gigabytes of transfer.
 #
 # The corpus lives as release assets on a public repo, one .tar.gz per root, so no token
 # and no secret are involved and a pull request from a fork gets the same coverage as a
@@ -15,10 +21,10 @@
 name: Corpus tests
 
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
-  schedule:
-    # Nightly, well clear of the working day in US Pacific.
-    - cron: '0 11 * * *'
 
 concurrency:
   group: corpus-${{ github.workflow }}-${{ github.ref }}
@@ -28,8 +34,9 @@ permissions:
   contents: read
 
 env:
-  # Bump the tag when the corpus changes; the cache key below follows it, so a new tag
-  # re-downloads rather than silently reusing the previous corpus.
+  # Bump the tag when the corpus changes. A baseline and the corpus it was generated from
+  # have to move together: adding a baseline for a root that is not in this release fails
+  # the shard on the download, which is the right way round.
   CORPUS_REPO: RyanDFIR/data-sets
   CORPUS_TAG: corpus-v1
 
@@ -74,15 +81,12 @@ jobs:
 
       # Restoring the extracted tree costs a fraction of re-downloading and re-extracting
       # it. Keyed on the release tag, so bumping CORPUS_TAG invalidates it.
-      - name: Restore corpus root
-        id: corpus-cache
-        uses: actions/cache@v4
-        with:
-          path: corpus/${{ matrix.root }}
-          key: corpus-${{ env.CORPUS_TAG }}-${{ matrix.root }}
-
+      # Downloaded every run rather than cached. The extracted corpus is 5.9 GB across the
+      # six roots, and a repository only gets 10 GB of Actions cache with LRU eviction, so
+      # caching it would crowd out the pip caches the other workflows depend on and then
+      # get evicted itself. A release asset pulled from GitHub to a GitHub runner is fast
+      # enough that the cache was buying very little for that price.
       - name: Download and extract corpus root
-        if: steps.corpus-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p corpus
           url="https://github.com/${CORPUS_REPO}/releases/download/${CORPUS_TAG}/${{ matrix.root }}.tar.gz"
