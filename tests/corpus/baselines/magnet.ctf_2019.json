@@ -1,0 +1,285 @@
+{
+  "data_types": {
+    "chrome:cache:entry": 7359,
+    "chrome:cookie:entry": 201,
+    "chrome:extension:installed": 32,
+    "chrome:extension_storage:entry": 2,
+    "chrome:history:file_downloaded": 5,
+    "chrome:history:page_visited": 594,
+    "chrome:indexeddb:entry": 76,
+    "chrome:local_storage:entry": 554,
+    "chrome:login_item:entry": 2,
+    "chrome:preferences:entry": 56,
+    "chrome:service_worker:cache_entry": 8,
+    "chrome:service_worker:registration": 25,
+    "chrome:service_worker:resource": 80,
+    "chrome:service_worker:script": 20,
+    "chrome:session_storage:entry": 689,
+    "chrome:site_setting:entry": 87,
+    "chrome:sync_data:entry": 2
+  },
+  "generated_by": {
+    "generated_utc": "2026-09-04T17:01:54Z",
+    "hindsight_version": "2026.06"
+  },
+  "profiles": {
+    "Users/Administrator/AppData/Local/Google/Chrome/User Data/Default": {
+      "artifacts": {
+        "Autofill": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Cache": {
+          "count": 309,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Cookies": {
+          "count": 107,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Extension Rules": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Extension State": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Extensions": {
+          "count": 9,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "GPUCache": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "HSTS": {
+          "count": 17,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "History": {
+          "count": 6,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "History_downloads": {
+          "count": 3,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Local Extension Settings": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Local Storage": {
+          "count": 267,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Login Data": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Preferences": {
+          "count": 21,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Secure Preferences": {
+          "count": 16,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Service Workers": {
+          "count": 14,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Session Storage": {
+          "count": 11,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Site Characteristics": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync Data": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync Extension Settings": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        }
+      },
+      "browser": "Chrome"
+    },
+    "Users/SelmaBouvier/AppData/Local/Google/Chrome/User Data/Default": {
+      "artifacts": {
+        "Autofill": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Cache": {
+          "count": 7042,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Cookies": {
+          "count": 94,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Extension Rules": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Extension State": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Extensions": {
+          "count": 9,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "GPUCache": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "HSTS": {
+          "count": 36,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "History": {
+          "count": 588,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "History_downloads": {
+          "count": 2,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "IndexedDB": {
+          "count": 76,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Local Extension Settings": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Local Storage": {
+          "count": 287,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Login Data": {
+          "count": 2,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Preferences": {
+          "count": 35,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Secure Preferences": {
+          "count": 16,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Service Workers": {
+          "count": 119,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Session Storage": {
+          "count": 678,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Site Characteristics": {
+          "count": 8,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync Data": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync Extension Settings": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        }
+      },
+      "browser": "Chrome"
+    }
+  },
+  "root": "magnet.ctf_2019",
+  "total_records": 9792
+}

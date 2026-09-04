@@ -14,7 +14,7 @@
 #   separators, line endings, file locking) does not vary by Python minor version.
 # - Widening this is a one-line change: add entries to the include list.
 #
-# 3.11 is the floor, declared to match in setup.py. ccl_chromium_reader allows
+# 3.11 is the floor, declared to match in pyproject.toml. ccl_chromium_reader allows
 # 3.10, but pyhindsight.utils uses datetime.UTC, which does not exist before
 # 3.11. 3.10 reaches end of life in October 2026, so the floor moved rather
 # than the code.
