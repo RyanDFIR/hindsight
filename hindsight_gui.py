@@ -9,7 +9,7 @@ import importlib
 import pyhindsight
 import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
-from pyhindsight.utils import get_rich_banner
+from pyhindsight.utils import get_rich_banner, make_stdout_resilient
 import rich.align
 import rich.console
 
@@ -297,6 +297,7 @@ def sqlite_view():
 
 
 def main():
+    make_stdout_resilient()
     console = rich.console.Console()
     console.print(rich.align.Align.center(get_rich_banner()))
     global STATIC_PATH
