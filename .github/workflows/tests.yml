@@ -1,0 +1,80 @@
+# Runs the unit test suite on every push and pull request.
+#
+# The suite is fast (about 4 seconds for 185 tests) and self-contained: no network,
+# no platform guards, and every fixture is committed under tests/fixtures. The job
+# cost is almost entirely runner startup and dependency install, so the matrix is
+# sized for coverage rather than for minutes.
+#
+# Matrix shape:
+# - Linux carries the full supported Python range. Version-specific breakage in this
+#   codebase is OS-independent (it is pure Python; the platform-specific pieces are
+#   pywin32 and path handling), so running every minor version on all three operating
+#   systems mostly re-tests the same thing.
+# - Windows and macOS run the floor and the ceiling. OS-specific breakage (path
+#   separators, line endings, file locking) does not vary by Python minor version.
+# - Widening this is a one-line change: add entries to the include list.
+#
+# 3.10 is the floor, set by ccl_chromium_reader (requires-python >=3.10) and
+# declared to match in setup.py.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes an in-flight run redundant.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # one platform failing should not hide the others
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.10'
+          - os: ubuntu-latest
+            python: '3.11'
+          - os: ubuntu-latest
+            python: '3.12'
+          - os: ubuntu-latest
+            python: '3.13'
+          - os: ubuntu-latest
+            python: '3.14'
+          - os: windows-latest
+            python: '3.10'
+          - os: windows-latest
+            python: '3.14'
+          - os: macos-15 # pinned rather than -latest so the environment does not
+                         # silently migrate underneath the suite
+            python: '3.11' # macOS floor; arm64 coverage for 3.10 is not dependable
+          - os: macos-15
+            python: '3.14'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-test.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-test.txt
+
+      # Several tests build fixture paths relative to the working directory
+      # (os.path.join('tests', 'fixtures', ...)), so this has to run from the
+      # repo root rather than from tests/.
+      - name: Run tests
+        run: pytest tests/ -v
