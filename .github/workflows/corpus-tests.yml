@@ -1,0 +1,105 @@
+# End-to-end parses of real browser profiles, compared to committed baselines.
+#
+# Runs on every pull request, because a regression arrives with a commit and that is when
+# it is cheapest to find. A nightly schedule would only tell you something broke in the
+# last day and leave you to bisect for it, so there isn't one. Also on push to main, which
+# is not redundant with the pull-request run: merging a PR that was behind main produces a
+# commit no run has ever seen.
+#
+# Sharded one job per corpus root. That keeps each runner's disk to a single archive
+# rather than the whole 6 GB corpus, turns a failure into "magnet.ctf_2019 changed"
+# instead of one opaque red tick, and lets the roots run in parallel.
+#
+# No paths filter. Skipping doc-only pull requests would save bandwidth, but a filter that
+# is missing one file silently stops testing a real change, and a false green here is much
+# more expensive than a few gigabytes of transfer.
+#
+# The corpus lives as release assets on a public repo, one .tar.gz per root, so no token
+# and no secret are involved and a pull request from a fork gets the same coverage as a
+# branch here. That is the whole reason for publishing it rather than gating it behind a
+# repository secret.
+name: Corpus tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: corpus-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Bump the tag when the corpus changes. A baseline and the corpus it was generated from
+  # have to move together: adding a baseline for a root that is not in this release fails
+  # the shard on the download, which is the right way round.
+  CORPUS_REPO: RyanDFIR/data-sets
+  CORPUS_TAG: corpus-v1
+
+jobs:
+  # The set of baseline files is the manifest. Deriving the matrix from it means adding a
+  # root is one generated baseline, with no second list here to forget to update.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.roots.outputs.roots }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: roots
+        run: |
+          roots=$(python3 -c 'import json,pathlib;print(json.dumps(sorted(p.stem for p in pathlib.Path("tests/corpus/baselines").glob("*.json"))))')
+          echo "roots=$roots" >> "$GITHUB_OUTPUT"
+          echo "Corpus roots: $roots"
+
+  corpus:
+    needs: discover
+    name: ${{ matrix.root }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one root changing should not hide the others
+      matrix:
+        root: ${{ fromJSON(needs.discover.outputs.roots) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt --group test
+
+      # Restoring the extracted tree costs a fraction of re-downloading and re-extracting
+      # it. Keyed on the release tag, so bumping CORPUS_TAG invalidates it.
+      # Downloaded every run rather than cached. The extracted corpus is 5.9 GB across the
+      # six roots, and a repository only gets 10 GB of Actions cache with LRU eviction, so
+      # caching it would crowd out the pip caches the other workflows depend on and then
+      # get evicted itself. A release asset pulled from GitHub to a GitHub runner is fast
+      # enough that the cache was buying very little for that price.
+      - name: Download and extract corpus root
+        run: |
+          mkdir -p corpus
+          url="https://github.com/${CORPUS_REPO}/releases/download/${CORPUS_TAG}/${{ matrix.root }}.tar.gz"
+          echo "Fetching $url"
+          # --fail so a 404 stops the job here, with the URL in the log, rather than
+          # leaving tar to fail on an HTML error page.
+          curl --fail --location --silent --show-error --output root.tar.gz "$url"
+          tar -xzf root.tar.gz -C corpus
+          rm root.tar.gz
+          du -sh "corpus/${{ matrix.root }}"
+
+      - name: Run end-to-end parse
+        env:
+          HINDSIGHT_TEST_CORPUS: corpus
+          HINDSIGHT_TEST_CORPUS_ROOTS: ${{ matrix.root }}
+        run: pytest tests/test_corpus_e2e.py -v
