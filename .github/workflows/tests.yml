@@ -14,8 +14,10 @@
 #   separators, line endings, file locking) does not vary by Python minor version.
 # - Widening this is a one-line change: add entries to the include list.
 #
-# 3.10 is the floor, set by ccl_chromium_reader (requires-python >=3.10) and
-# declared to match in setup.py.
+# 3.11 is the floor, declared to match in setup.py. ccl_chromium_reader allows
+# 3.10, but pyhindsight.utils uses datetime.UTC, which does not exist before
+# 3.11. 3.10 reaches end of life in October 2026, so the floor moved rather
+# than the code.
 name: Tests
 
 on:
@@ -41,8 +43,6 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python: '3.10'
-          - os: ubuntu-latest
             python: '3.11'
           - os: ubuntu-latest
             python: '3.12'
@@ -51,7 +51,7 @@ jobs:
           - os: ubuntu-latest
             python: '3.14'
           - os: windows-latest
-            python: '3.10'
+            python: '3.11'
           - os: windows-latest
             python: '3.14'
           - os: macos-15 # pinned rather than -latest so the environment does not
