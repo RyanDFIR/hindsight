@@ -1,8 +1,0 @@
-# Development-only dependencies (not needed at runtime).
-# Install with: pip install -r requirements-dev.txt
-
-# Used by regen-protos.sh to compile .proto files in pyhindsight/lib/components/
-# into _pb2.py modules under pyhindsight/lib/proto/components/.
-# The bundled protoc determines the gencode target — keep this version in
-# range with the runtime `protobuf` pin in requirements.txt.
-grpcio-tools>=1.71,<2.0

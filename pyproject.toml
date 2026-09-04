@@ -1,0 +1,77 @@
+[build-system]
+# setuptools >= 77 is what understands the PEP 639 SPDX "license" string below.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyhindsight"
+description = "Browser forensics for Google Chrome/Chromium"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE.md"]
+authors = [{name = "Ryan Benson", email = "ryan@hindsig.ht"}]
+keywords = ["chrome", "forensics", "dfir", "google-chrome", "chromium"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Topic :: Security",
+    "Topic :: System :: Recovery Tools",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+# ccl_chromium_reader is deliberately absent: it is not on PyPI, and PyPI rejects
+# direct-URL dependencies, so it cannot be declared here. requirements.txt carries
+# it for source installs. Without it a PyPI install silently loses cache, IndexedDB
+# and LocalStorage parsing.
+dependencies = [
+    "bottle>=0.12.18",
+    "keyring>=21.2.1",
+    "protobuf>=6.33.2",
+    "puremagic~=1.11",
+    "pycryptodomex>=3.9.7",
+    'pywin32>=306; sys_platform == "win32"',
+    "rich>=13.0",
+    "tzdata>=2024.1",
+    "xlsxwriter>=3.1",
+]
+
+# The version lives in code because hindsight.py, the GUI and every JSONL record
+# stamp it at runtime. __version__ is the display form ("2026.06"); __pypi_version__
+# is the PEP 440 integer form the index needs. See pyhindsight/__init__.py.
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/RyanDFIR/hindsight"
+Issues = "https://github.com/RyanDFIR/hindsight/issues"
+
+[project.scripts]
+hindsight = "hindsight:main"
+hindsight-gui = "hindsight_gui:main"
+
+# Dependencies that are never part of the distribution (PEP 735).
+#   pip install -r requirements.txt --group test
+[dependency-groups]
+test = ["pytest>=8", "openpyxl>=3.1"]
+dev = ["grpcio-tools>=1.71,<2.0"]
+
+[tool.setuptools]
+# hindsight.py and hindsight_gui.py sit at the repo root rather than inside the
+# package. py-modules installs them so the console scripts above can import them;
+# script-files additionally copies them into the scripts directory, which keeps the
+# historical "hindsight.py" command working for anyone who already types it.
+py-modules = ["hindsight", "hindsight_gui"]
+script-files = ["hindsight.py", "hindsight_gui.py"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pyhindsight.__pypi_version__"}
+
+[tool.setuptools.packages.find]
+include = ["pyhindsight*"]
+
+[tool.pytest.ini_options]
+# Several tests build fixture paths relative to the working directory, so pytest
+# has to be invoked from the repo root.
+testpaths = ["tests"]

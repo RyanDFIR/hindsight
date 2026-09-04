@@ -4,7 +4,7 @@
 # (mirroring the source tree layout).
 #
 # Usage: ./regen-protos.sh
-# Requires: pip install grpcio-tools  (pinned in requirements-dev.txt)
+# Requires: pip install --group dev  (grpcio-tools, pinned in pyproject.toml)
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
