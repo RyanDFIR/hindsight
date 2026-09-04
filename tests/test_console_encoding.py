@@ -180,10 +180,16 @@ class TestStdoutIsResilient(unittest.TestCase):
                  '-o', os.path.join(tmp, 'out'), '-f', 'jsonl',
                  '-l', os.path.join(tmp, 'hindsight.log'),
                  '--temp_dir', os.path.join(tmp, 'temp')],
-                cwd=REPO_ROOT, capture_output=True, text=True, timeout=300, env=env)
+                # Decode as what the child was told to write. `text=True` would use the
+                # parent's locale, which matches only on a Windows runner.
+                cwd=REPO_ROOT, capture_output=True, encoding='cp1252', timeout=300,
+                env=env)
             self.assertEqual(0, result.returncode,
                              f'stdout:\n{result.stdout}\nstderr:\n{result.stderr}')
             self.assertNotIn('UnicodeEncodeError', result.stdout + result.stderr)
+            # The banner falls back to a bullet when the encoding cannot take its
+            # triangle, so its presence confirms the child really ran on cp1252.
+            self.assertIn('•', result.stdout)
             self.assertTrue(os.path.exists(os.path.join(tmp, 'out.jsonl')))
 
 
