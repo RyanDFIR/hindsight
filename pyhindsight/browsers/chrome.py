@@ -1061,12 +1061,23 @@ class Chrome(WebBrowser):
                         username_row.source_item = source_item
                         results.append(username_row)
 
-                if row.get('password_value') is not None and self.available_decrypts['windows'] == 1:
-                    try:
-                        # Windows is all I've had time to test; Ubuntu uses built-in password manager
-                        password = win32crypt.CryptUnprotectData(
-                            row.get('password_value').decode(), None, None, None, 0)[1]
-                    except:
+                # Emitted whether or not the value can be read. That a credential was
+                # saved for a site is a finding on its own, and it used to disappear
+                # along with the value on any machine without Windows decryption, so
+                # the same profile answered differently depending on the examiner's OS.
+                # Cookies and autofill already keep the row and mark it '<encrypted>';
+                # this is the same convention, not a new one.
+                if row.get('password_value') is not None:
+                    password = None
+                    if self.available_decrypts['windows'] == 1:
+                        try:
+                            password = win32crypt.CryptUnprotectData(
+                                row.get('password_value').decode(), None, None, None, 0)[1]
+                        except Exception:
+                            password = None
+                    if password is None:
+                        # Handles the macOS and Linux keys as well, and returns
+                        # '<encrypted>' when it cannot read the value at all.
                         password = self.decrypt_cookie(row.get('password_value'))
 
                     password_row = Chrome.LoginItem(
