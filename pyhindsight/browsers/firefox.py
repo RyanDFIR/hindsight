@@ -128,6 +128,39 @@ INTERESTING_PREFS = [
     ]),
 ]
 
+# Where Firefox keeps a cache that lives outside the profile directory, as
+# (profile fragment, cache fragment) written with forward slashes.
+#   Windows: %APPDATA%\Mozilla\Firefox -> %LOCALAPPDATA%\Mozilla\Firefox
+#   macOS:   ~/Library/Application Support/Firefox -> ~/Library/Caches/Firefox
+_CACHE_REDIRECTS = (
+    ('/roaming/mozilla/firefox/', '/Local/Mozilla/Firefox/'),
+    ('/library/application support/firefox/', '/Library/Caches/Firefox/'),
+)
+
+
+def redirected_cache_paths(profile_path):
+    """Yield the out-of-profile cache locations implied by `profile_path`.
+
+    Pure string work: it says where to look, not whether anything is there. These
+    describe where the *evidence* keeps its cache, so they must not depend on the OS
+    Hindsight is running on. Windows profiles get parsed on Linux and the reverse.
+
+    Searched in a forward-slashed copy because one path can mix separators (the input
+    is however the user typed it, everything discovered below it is joined with
+    os.sep). Replacing backslashes is one character for one, so offsets map straight
+    back onto the original, and the separator already at the match keeps the rebuilt
+    path in the style the rest of it uses.
+    """
+    probe = profile_path.replace('\\', '/').lower()
+    for needle, replacement in _CACHE_REDIRECTS:
+        start = probe.find(needle)
+        if start < 0:
+            continue
+        separator = profile_path[start]
+        yield (profile_path[:start]
+               + replacement.replace('/', separator)
+               + profile_path[start + len(needle):])
+
 
 class Firefox(WebBrowser):
     def __init__(self, profile_path, browser_name=None, cache_path=None, version=None, timezone=None,
@@ -2014,7 +2047,9 @@ class Firefox(WebBrowser):
         def _entries_under(p):
             if not p or not os.path.isdir(p):
                 return None
-            base = os.path.basename(p.rstrip(os.sep)).lower()
+            # Strip either separator, not just this machine's: a path carrying the
+            # target system's separator has to be read the same way here.
+            base = os.path.basename(p.rstrip('\\/')).lower()
             if base == 'entries':
                 return p
             if base == 'cache2':
@@ -2031,23 +2066,8 @@ class Firefox(WebBrowser):
         if cand:
             return cand
 
-        # Windows: %APPDATA%\Mozilla\Firefox -> %LOCALAPPDATA%\Mozilla\Firefox
-        norm = self.profile_path.replace('/', os.sep)
-        lower = norm.lower()
-        if '\\roaming\\mozilla\\firefox\\' in lower:
-            local = re.sub(r'\\Roaming\\Mozilla\\Firefox\\',
-                           r'\\Local\\Mozilla\\Firefox\\', norm, count=1, flags=re.IGNORECASE)
-            cand = _entries_under(local)
-            if cand:
-                log.info(f' - Auto-detected Firefox cache at {cand}')
-                return cand
-
-        # macOS: ~/Library/Application Support/Firefox -> ~/Library/Caches/Firefox
-        if '/Library/Application Support/Firefox/' in self.profile_path:
-            mac = self.profile_path.replace(
-                '/Library/Application Support/Firefox/',
-                '/Library/Caches/Firefox/', 1)
-            cand = _entries_under(mac)
+        for redirected in redirected_cache_paths(self.profile_path):
+            cand = _entries_under(redirected)
             if cand:
                 log.info(f' - Auto-detected Firefox cache at {cand}')
                 return cand
