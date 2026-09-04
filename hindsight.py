@@ -21,7 +21,7 @@ import pyhindsight
 import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
 from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
-from pyhindsight.utils import get_rich_banner
+from pyhindsight.utils import get_rich_banner, make_stdout_resilient
 
 import rich.align
 import rich.console
@@ -156,6 +156,8 @@ The Chrome Profile folder default locations are:
 
 def main():
 
+    make_stdout_resilient()
+
     def write_excel(analysis_session):
         import io
 
@@ -225,10 +227,12 @@ def main():
     analysis_session.temp_dir = args.temp_dir
     analysis_session.log_path = args.log
 
-    # Set up logging
+    # Set up logging. encoding is explicit because the default is the platform's, cp1252
+    # on Windows, which silently mangles anything outside it. logging swallows handler
+    # errors, so this never raised; it just lost characters from the record of the run.
     logging.basicConfig(filename=analysis_session.log_path, level=logging.DEBUG,
                         format='%(asctime)s.%(msecs).03d | %(levelname).01s | %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S')
+                        datefmt='%Y-%m-%d %H:%M:%S', encoding='utf-8')
     log = logging.getLogger(__name__)
 
     # Hindsight version info

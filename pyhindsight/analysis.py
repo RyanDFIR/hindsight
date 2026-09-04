@@ -18,7 +18,8 @@ from pyhindsight.artifact_filter import ArtifactFilter
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.browsers.firefox import Firefox
 from pyhindsight.browsers.webbrowser import (
-    ARTIFACT_STATUS_FAILED, ARTIFACT_STATUS_SKIPPED, WebBrowser, timeline_sort_key)
+    ARTIFACT_STATUS_FAILED, ARTIFACT_STATUS_SKIPPED, WebBrowser, spinner_name,
+    timeline_sort_key)
 from pyhindsight.utils import friendly_date
 import pyhindsight.plugins
 import rich.align
@@ -1385,7 +1386,7 @@ class AnalysisSession(object):
             return text
 
         def running_status():
-            return rich.spinner.Spinner("dots")
+            return rich.spinner.Spinner(spinner_name(console))
 
         def build_plugin_table():
             table = rich.table.Table(show_header=False, box=None, expand=False)

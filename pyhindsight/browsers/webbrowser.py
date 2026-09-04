@@ -29,6 +29,17 @@ ARTIFACT_STATUS_PARTIAL = 'partial'
 # Marks a row whose parser is still running, so the table renders a spinner for it.
 _SPINNER = object()
 
+
+def spinner_name(console):
+    """Return a spinner whose frames the console's encoding can represent.
+
+    rich swaps its box characters for ASCII when the encoding cannot carry them
+    (`ConsoleOptions.ascii_only`) but does not do the same for `Spinner`, whose default
+    "dots" frames are Braille. On a cp1252 stream those frames are what raises.
+    """
+    return 'line' if console.options.ascii_only else 'dots'
+
+
 # Every collection a parser can deliver results into. The driver snapshots their sizes
 # around each parser so it can catch the one failure a count cannot reveal on its own:
 # results parsed and counted, then dropped before they reach any of these.
@@ -442,7 +453,8 @@ class ProcessingDisplay:
         leading = " " * (self.count_width - 1)
         spinner = rich.columns.Columns(
             [rich.text.Text("  [ ", style="dim"), rich.text.Text(leading),
-             rich.spinner.Spinner("dots", text="", style="green"), rich.text.Text(" ]  ", style="dim")],
+             rich.spinner.Spinner(spinner_name(self.console), text="", style="green"),
+             rich.text.Text(" ]  ", style="dim")],
             expand=False,
             equal=False,
             padding=(0, 0))

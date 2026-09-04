@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import struct
+import sys
 from pyhindsight import __version__
 from pathlib import Path
 
@@ -436,6 +437,23 @@ def _supports_unicode():
         return True
     except (UnicodeEncodeError, LookupError):
         return False
+
+
+def make_stdout_resilient():
+    """Degrade unencodable characters on stdout instead of raising.
+
+    A redirected stdout on Windows is cp1252, and the progress display renders from
+    inside whatever parser is running, so a write that raises there is caught by that
+    parser's `except` and reported as an unreadable artifact. That silently cost 954
+    Session Storage records. Returns whether the stream was adjusted.
+    """
+    if not hasattr(sys.stdout, 'reconfigure'):
+        return False
+    try:
+        sys.stdout.reconfigure(errors='backslashreplace')
+    except (AttributeError, ValueError, OSError):
+        return False
+    return True
 
 
 def get_rich_banner():
