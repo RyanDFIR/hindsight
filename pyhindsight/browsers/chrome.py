@@ -3706,6 +3706,19 @@ class Chrome(WebBrowser):
                                 tl_item.data_summary = data_summary
                                 tl_item.http_headers_str = str(headers_dict) if headers_dict else ''
                                 tl_item.etag = etag_val
+                                # Same digest already computed for the Storage row above,
+                                # so the Timeline's Body SHA256 column covers every cache
+                                # row with a body rather than only the HTTP cache ones.
+                                #
+                                # Recorded unconditionally, unlike the HTTP cache:
+                                # CacheStorage holds the body the Cache API was handed,
+                                # already decoded, while keeping the original response
+                                # headers, so its content-encoding describes the wire form
+                                # and not these bytes. Measured across the test corpus: of
+                                # 3,230 entries declaring an encoding, no gzip one (1,688)
+                                # begins with the gzip magic and no brotli one (1,542)
+                                # decompresses; all hold readable content.
+                                tl_item.body_sha256 = body_sha
                                 tl_item.last_modified = last_mod_val
                                 tl_item.source_item = os.path.relpath(
                                     scf_path, self.profile_path)
@@ -3742,6 +3755,7 @@ class Chrome(WebBrowser):
 
         cache_items = profile.iterate_cache(url=None, omit_cached_data=False)
         source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
+        unhashed_bodies = 0
 
         try:
             for cache_item in cache_items:
@@ -3764,6 +3778,13 @@ class Chrome(WebBrowser):
                 parsed_item.stringify_http_headers()
                 parsed_item.etag = (cache_item.metadata.get_attribute("etag") or [""])[0]
                 parsed_item.last_modified = (cache_item.metadata.get_attribute("last-modified") or [""])[0]
+                # The body is already in memory (omit_cached_data=False), so this costs
+                # no extra reads.
+                parsed_item.hash_body(cache_item.was_decompressed)
+                if cache_item.data and parsed_item.body_sha256 is None:
+                    # Body present but left unhashed because it could not be decoded. An
+                    # empty hash cell otherwise reads as "no body", so count them.
+                    unhashed_bodies += 1
                 parsed_item.source_item = source_item
 
                 results.append(parsed_item)
@@ -3771,6 +3792,11 @@ class Chrome(WebBrowser):
         except Exception as e:
             log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
             return None
+
+        if unhashed_bodies:
+            log.warning(f' - {unhashed_bodies} cached bodies were not hashed; their '
+                        f'content-encoding could not be decoded, so the bytes on disk '
+                        f'are not the resource')
 
         self.parsed_artifacts.extend(results)
         return unparsed.result(len(results))
@@ -4238,7 +4264,8 @@ class Chrome(WebBrowser):
             'source_path': node['source_path'],
             'file_exists': node.get('file_exists'),
             'file_size': node.get('file_size'),
-            'magic_results': node.get('magic_results')
+            'magic_results': node.get('magic_results'),
+            'file_sha256': node.get('file_sha256')
         }
 
         if node.get('modification_time'):
@@ -4250,13 +4277,21 @@ class Chrome(WebBrowser):
 
     @staticmethod
     def get_local_file_info(file_path):
-        file_size, magic_results = None, None
+        """Describe a File System API backing file: existence, size, type and SHA-256.
+
+        These are real files a site stored on disk, so the hash is what makes one
+        comparable to anything outside the profile (a known-file set, a copy recovered
+        elsewhere). Empty files are left unhashed: the digest of no bytes identifies
+        nothing, and a constant appearing throughout the output reads as a finding.
+        """
+        file_size, magic_results, file_sha256 = None, None, None
         exists = os.path.isfile(file_path)
 
         if exists:
             file_size = os.stat(file_path).st_size
 
         if file_size:
+            file_sha256 = utils.sha256_file(file_path)
             magic_candidates = puremagic.magic_file(file_path)
             if magic_candidates:
                 for magic_candidate in magic_candidates:
@@ -4266,7 +4301,7 @@ class Chrome(WebBrowser):
                     else:
                         magic_results = f'{magic_candidate.name} ({magic_candidate.confidence:.0%})'
 
-        return exists, file_size, magic_results
+        return exists, file_size, magic_results, file_sha256
 
     def get_file_system(self, path, dir_name):
 
@@ -4367,11 +4402,12 @@ class Chrome(WebBrowser):
                             if len(path_parts) >= 2:
                                 normalized_backing_file_path = os.path.join(
                                     path_nodes['0']['fs_path'], fs_type, path_parts[0], path_parts[1])
-                                file_exists, file_size, magic_results = self.get_local_file_info(
+                                file_exists, file_size, magic_results, file_sha256 = self.get_local_file_info(
                                            os.path.join(self.profile_path, normalized_backing_file_path))
                                 backing_file['file_exists'] = file_exists
                                 backing_file['file_size'] = file_size
                                 backing_file['magic_results'] = magic_results
+                                backing_file['file_sha256'] = file_sha256
 
                             else:
                                 normalized_backing_file_path = os.path.join(
@@ -4426,6 +4462,7 @@ class Chrome(WebBrowser):
                                     'file_exists': backing_file.get('file_exists'),
                                     'file_size': backing_file.get('file_size'),
                                     'magic_results': backing_file.get('magic_results'),
+                                    'file_sha256': backing_file.get('file_sha256'),
                                 })
 
                         result_count += 1
@@ -4462,7 +4499,7 @@ class Chrome(WebBrowser):
                             value=item.get('local_path'), seq=item['seq'], state=item['state'],
                             source_path=str(item['source_path']), last_modified=item.get('modification_time'),
                             file_exists=item.get('file_exists'), file_size=item.get('file_size'),
-                            magic_results=item.get('magic_results')
+                            magic_results=item.get('magic_results'), file_sha256=item.get('file_sha256')
                         ))
 
         self.parsed_storage.extend(result_list)

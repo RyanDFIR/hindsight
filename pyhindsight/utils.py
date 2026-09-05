@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -39,6 +40,24 @@ def text_factory(row_data):
         return row_data.decode('utf-8')
     except UnicodeDecodeError:
         return row_data
+
+
+def sha256_file(file_path, chunk_size=1024 * 1024):
+    """Return the SHA-256 of a file as hex, or None if it cannot be read.
+
+    Read in chunks so a large file does not have to fit in memory. A hash is
+    supplementary to the record it annotates, so an unreadable file returns None
+    rather than raising and costing the caller the whole artifact.
+    """
+    digest = hashlib.sha256()
+    try:
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(chunk_size), b''):
+                digest.update(chunk)
+    except OSError as e:
+        log.debug(f' - Could not hash {file_path}: {e}')
+        return None
+    return digest.hexdigest()
 
 
 def note_open_failure(browser, database_path, database_name, reason):
