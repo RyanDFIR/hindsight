@@ -441,6 +441,14 @@ class HindsightEncoder(json.JSONEncoder):
         if isinstance(obj, Chrome.IndexedDBItem):
             item = HindsightEncoder.base_encoder(obj)
 
+            # value is a property, so base_encoder's __dict__ walk never sees it, and the
+            # private fields it does see must not reach the output: _value_obj is an
+            # arbitrary deserialized structure json cannot be relied on to render. Same
+            # pattern as the cache body a few branches up.
+            item.pop('_value_obj', None)
+            item.pop('_value_str', None)
+            item['value'] = obj.value
+
             item['timestamp_desc'] = 'Not a time'
             item['data_type'] = 'chrome:indexeddb:entry'
             item['source_long'] = 'Chrome IndexedDB'
@@ -450,6 +458,7 @@ class HindsightEncoder(json.JSONEncoder):
 
             item['message'] = (
                 f'database: {item.get("database", "")} '
+                f'object store: {item.get("object_store", "")} '
                 f'key: {item.get("key", "")} '
                 f'value: {item.get("value", "")}'
             )
@@ -1951,8 +1960,8 @@ class AnalysisSession(object):
         used_sheet_names.add('storage')
         # Title bar
         s.merge_range('A1:G1', f'Hindsight Internet History Forensics (v{__version__}) - Storage', title_header_format)
-        s.merge_range('H1:K1', 'Backing Database Specific', center_header_format)
-        s.merge_range('L1:O1', 'FileSystem Specific', center_header_format)
+        s.merge_range('H1:L1', 'Backing Database Specific', center_header_format)
+        s.merge_range('M1:P1', 'FileSystem Specific', center_header_format)
 
         # Write column headers
         s.write(1, 0, 'Type', header_format)
@@ -1964,12 +1973,13 @@ class AnalysisSession(object):
         s.write(1, 6, 'Profile', header_format)
         s.write(1, 7, 'Source Item', header_format)
         s.write(1, 8, 'Database', header_format)
-        s.write(1, 9, 'Sequence', header_format)
-        s.write(1, 10, 'State', header_format)
-        s.write(1, 11, 'File Exists?', header_format)
-        s.write(1, 12, 'File Size (bytes)', header_format)
-        s.write(1, 13, 'File Type (Confidence %)', header_format)
-        s.write(1, 14, 'File SHA256', header_format)
+        s.write(1, 9, 'Object Store', header_format)
+        s.write(1, 10, 'Sequence', header_format)
+        s.write(1, 11, 'State', header_format)
+        s.write(1, 12, 'File Exists?', header_format)
+        s.write(1, 13, 'File Size (bytes)', header_format)
+        s.write(1, 14, 'File Type (Confidence %)', header_format)
+        s.write(1, 15, 'File SHA256', header_format)
 
         # Set column widths
         s.set_column('A:A', 16)  # Type
@@ -1981,12 +1991,13 @@ class AnalysisSession(object):
         s.set_column('G:G', 50)  # Profile
         s.set_column('H:H', 50)  # Source Path
         s.set_column('I:I', 16)  # Database
-        s.set_column('J:J', 8)   # Seq
-        s.set_column('K:K', 8)   # State
-        s.set_column('L:L', 8)   # Exists
-        s.set_column('M:M', 16)  # Size
-        s.set_column('N:N', 25)  # Type
-        s.set_column('O:O', 66)  # SHA256 (64 hex characters)
+        s.set_column('J:J', 24)  # Object Store
+        s.set_column('K:K', 8)   # Seq
+        s.set_column('L:L', 8)   # State
+        s.set_column('M:M', 8)   # Exists
+        s.set_column('N:N', 16)  # Size
+        s.set_column('O:O', 25)  # Type
+        s.set_column('P:P', 66)  # SHA256 (64 hex characters)
 
         # Start at the row after the headers, and begin writing out the items in parsed_artifacts
         row_number = 2
@@ -2004,12 +2015,12 @@ class AnalysisSession(object):
                     s.write(row_number, 5, item.interpretation, black_value_format)
                     s.write(row_number, 6, item.profile, black_value_format)
                     s.write(row_number, 7, source_item(item.source_path, item.profile), black_value_format)
-                    s.write_number(row_number, 9, item.seq, black_value_format)
-                    s.write_string(row_number, 10, item.state, black_value_format)
-                    s.write(row_number, 11, item.file_exists, black_value_format)
-                    s.write(row_number, 12, item.file_size, black_value_format)
-                    s.write(row_number, 13, item.magic_results, black_value_format)
-                    s.write(row_number, 14, item.file_sha256, black_value_format)
+                    s.write_number(row_number, 10, item.seq, black_value_format)
+                    s.write_string(row_number, 11, item.state, black_value_format)
+                    s.write(row_number, 12, item.file_exists, black_value_format)
+                    s.write(row_number, 13, item.file_size, black_value_format)
+                    s.write(row_number, 14, item.magic_results, black_value_format)
+                    s.write(row_number, 15, item.file_sha256, black_value_format)
 
                 elif item.row_type.startswith(("local storage", "session storage")):
                     s.write_string(row_number, 0, item.row_type, black_type_format)
@@ -2020,8 +2031,8 @@ class AnalysisSession(object):
                     s.write(row_number, 5, item.interpretation, black_value_format)
                     s.write(row_number, 6, item.profile, black_value_format)
                     s.write(row_number, 7, source_item(item.source_path, item.profile), black_value_format)
-                    s.write_number(row_number, 9, item.seq, black_value_format)
-                    s.write_string(row_number, 10, item.state, black_value_format)
+                    s.write_number(row_number, 10, item.seq, black_value_format)
+                    s.write_string(row_number, 11, item.state, black_value_format)
 
                 elif item.row_type.startswith("indexeddb"):
                     s.write_string(row_number, 0, item.row_type, black_type_format)
@@ -2032,8 +2043,9 @@ class AnalysisSession(object):
                     s.write(row_number, 6, item.profile, black_value_format)
                     s.write(row_number, 7, source_item(item.source_path, item.profile), black_value_format)
                     s.write(row_number, 8, item.database, black_value_format)
-                    s.write_number(row_number, 9, item.seq, black_value_format)
-                    s.write_string(row_number, 10, item.state, black_value_format)
+                    s.write(row_number, 9, item.object_store, black_value_format)
+                    s.write_number(row_number, 10, item.seq, black_value_format)
+                    s.write_string(row_number, 11, item.state, black_value_format)
 
                 else:
                     s.write_string(row_number, 0, item.row_type, black_type_format)
@@ -2044,8 +2056,8 @@ class AnalysisSession(object):
                     s.write(row_number, 6, item.profile, black_value_format)
                     s.write(row_number, 7, source_item(item.source_path, item.profile), black_value_format)
                     # s.write(row_number, 8, item.database, black_value_format)
-                    s.write_number(row_number, 9, item.seq, black_value_format)
-                    s.write_string(row_number, 10, item.state, black_value_format)
+                    s.write_number(row_number, 10, item.seq, black_value_format)
+                    s.write_string(row_number, 11, item.state, black_value_format)
 
             except Exception as e:
                 log.error(f'Failed to write row to XLSX: {e}')
@@ -2056,7 +2068,7 @@ class AnalysisSession(object):
         s.freeze_panes(2, 0)  # Freeze top row
         # 14, not 12: the range stopped short of File Type before the SHA256 column
         # was added, leaving the last column(s) outside the filter.
-        s.autofilter(1, 0, row_number, 14)  # Add autofilter
+        s.autofilter(1, 0, row_number, 15)  # Add autofilter
 
         #########################################
         # Service Workers worksheet
@@ -3125,7 +3137,8 @@ class AnalysisSession(object):
             c.execute(
                 'CREATE TABLE storage(type TEXT, origin TEXT, key TEXT, value TEXT, '
                 'modification_time TEXT, interpretation TEXT, profile TEXT, source_path TEXT, '
-                'database TEXT, seq INT, state INT, state_friendly TEXT, file_exists BOOL, file_size INT, '
+                'database TEXT, object_store TEXT, key_type TEXT, key_raw TEXT, '
+                'seq INT, state INT, state_friendly TEXT, file_exists BOOL, file_size INT, '
                 'magic_results TEXT, file_sha256 TEXT)')
 
             c.execute(
@@ -3322,10 +3335,12 @@ class AnalysisSession(object):
                 elif item.row_type.startswith('indexed'):
                     c.execute(
                         'INSERT INTO storage (type, origin, key, value, '
-                        'interpretation, profile, source_path, seq, state, state_friendly, database) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'interpretation, profile, source_path, seq, state, state_friendly, database, '
+                        'object_store, key_type, key_raw) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, item.origin, item.key, item.value, item.interpretation, item.profile,
-                         item.source_path, item.seq, state_to_int(item.state), item.state, item.database))
+                         item.source_path, item.seq, state_to_int(item.state), item.state, item.database,
+                         item.object_store, item.key_type, item.key_raw))
 
                 else:
                     # Previously fell through with no branch and no message, which is

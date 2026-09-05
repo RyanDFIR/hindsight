@@ -2079,10 +2079,21 @@ class Chrome(WebBrowser):
 
                                 record_value = self.resolve_indexeddb_blob_refs(record, origin)
 
+                                # Read defensively: the enclosing except aborts the rest
+                                # of this object store, so a key shaped unexpectedly must
+                                # cost its own record's metadata, not every record after
+                                # it.
+                                idb_key = getattr(record, 'key', None)
+                                key_type = getattr(getattr(idb_key, 'key_type', None), 'name', None)
+                                raw_key = getattr(idb_key, 'raw_key', None)
+
                                 results.append(Chrome.IndexedDBItem(
-                                    self.profile_path, origin, str(record.key.value), str(record_value),
-                                    int(record.ldb_seq_no), database=f"{record.database_name}.{obj_store_name}",
-                                    state=record_state, source_path=record_source_path))
+                                    self.profile_path, origin, str(getattr(idb_key, 'value', None)), None,
+                                    int(record.ldb_seq_no), database=record.database_name,
+                                    state=record_state, source_path=record_source_path,
+                                    object_store=obj_store_name, key_type=key_type,
+                                    key_raw=raw_key.hex() if isinstance(raw_key, (bytes, bytearray)) else None,
+                                    value_obj=record_value))
                         except FileNotFoundError as e:
                             unparsed.source(database, f'file not found ({e})')
 
