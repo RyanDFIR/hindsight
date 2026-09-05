@@ -1575,7 +1575,7 @@ class AnalysisSession(object):
         w.merge_range('A1:I1', f'Hindsight Internet History Forensics (v{__version__}) - Timeline', title_header_format)
         w.merge_range('J1:W1', 'URL Visit Specific', center_header_format)
         w.merge_range('X1:AC1', 'Download Specific', center_header_format)
-        w.merge_range('AD1:AF1', 'Cache Specific', center_header_format)
+        w.merge_range('AD1:AG1', 'Cache Specific', center_header_format)
 
         # Write column headers
         w.write(1, 0, 'Type', header_format)
@@ -1610,6 +1610,7 @@ class AnalysisSession(object):
         w.write(1, 29, 'ETag', header_format)
         w.write(1, 30, 'Last Modified', header_format)
         w.write(1, 31, 'All HTTP Headers', header_format)
+        w.write(1, 32, 'Body SHA256', header_format)
 
         # Set column widths
         w.set_column('A:A', 16)  # Type
@@ -1647,6 +1648,7 @@ class AnalysisSession(object):
 
         # Cache Specific
         w.set_column('AF:AF', 30)  # HTTP Headers
+        w.set_column('AG:AG', 66)  # Body SHA256 (64 hex characters)
 
         # Start at the row after the headers and begin writing out the items in parsed_artifacts
         row_number = 2
@@ -1774,6 +1776,7 @@ class AnalysisSession(object):
                     w.write(row_number, 29, item.etag, gray_value_format)  # ETag
                     w.write(row_number, 30, item.last_modified, gray_value_format)  # Last Modified
                     w.write(row_number, 31, item.http_headers_str, gray_value_format)  # headers
+                    w.write(row_number, 32, item.body_sha256, gray_value_format)  # Body SHA256
 
                 elif item.row_type.startswith("local storage"):
                     w.write_string(row_number, 0, item.row_type, gray_type_format)  # record_type
@@ -1939,7 +1942,7 @@ class AnalysisSession(object):
         w.freeze_panes(2, 0)  # Freeze top row
         # Items with no usable timestamp are sorted to the end (see timeline_sort_key)
         # rather than dated to the epoch and hidden, so no row filter is applied here.
-        w.autofilter(1, 0, row_number, 31)  # Add autofilter
+        w.autofilter(1, 0, row_number, 32)  # Add autofilter
 
         ##############################
         # Storage worksheet
@@ -1949,7 +1952,7 @@ class AnalysisSession(object):
         # Title bar
         s.merge_range('A1:G1', f'Hindsight Internet History Forensics (v{__version__}) - Storage', title_header_format)
         s.merge_range('H1:K1', 'Backing Database Specific', center_header_format)
-        s.merge_range('L1:N1', 'FileSystem Specific', center_header_format)
+        s.merge_range('L1:O1', 'FileSystem Specific', center_header_format)
 
         # Write column headers
         s.write(1, 0, 'Type', header_format)
@@ -1966,6 +1969,7 @@ class AnalysisSession(object):
         s.write(1, 11, 'File Exists?', header_format)
         s.write(1, 12, 'File Size (bytes)', header_format)
         s.write(1, 13, 'File Type (Confidence %)', header_format)
+        s.write(1, 14, 'File SHA256', header_format)
 
         # Set column widths
         s.set_column('A:A', 16)  # Type
@@ -1982,6 +1986,7 @@ class AnalysisSession(object):
         s.set_column('L:L', 8)   # Exists
         s.set_column('M:M', 16)  # Size
         s.set_column('N:N', 25)  # Type
+        s.set_column('O:O', 66)  # SHA256 (64 hex characters)
 
         # Start at the row after the headers, and begin writing out the items in parsed_artifacts
         row_number = 2
@@ -2004,6 +2009,7 @@ class AnalysisSession(object):
                     s.write(row_number, 11, item.file_exists, black_value_format)
                     s.write(row_number, 12, item.file_size, black_value_format)
                     s.write(row_number, 13, item.magic_results, black_value_format)
+                    s.write(row_number, 14, item.file_sha256, black_value_format)
 
                 elif item.row_type.startswith(("local storage", "session storage")):
                     s.write_string(row_number, 0, item.row_type, black_type_format)
@@ -2048,7 +2054,9 @@ class AnalysisSession(object):
 
         # Formatting
         s.freeze_panes(2, 0)  # Freeze top row
-        s.autofilter(1, 0, row_number, 12)  # Add autofilter
+        # 14, not 12: the range stopped short of File Type before the SHA256 column
+        # was added, leaving the last column(s) outside the filter.
+        s.autofilter(1, 0, row_number, 14)  # Add autofilter
 
         #########################################
         # Service Workers worksheet
@@ -3108,13 +3116,17 @@ class AnalysisSession(object):
                 'visit_id INT, from_visit INT, opener_visit INT, '
                 'visit_duration TEXT, visit_count INT, typed_count INT, url_hidden INT, transition TEXT, '
                 'interrupt_reason TEXT, danger_type TEXT, opened INT, etag TEXT, last_modified TEXT, http_headers TEXT, '
-                'mime_type TEXT, referrer TEXT, tab_url TEXT, download_source TEXT, hash TEXT, guid TEXT)')
+                # `hash` is the download hash Chrome recorded; body_sha256 is computed by
+                # Hindsight over the cached bytes. Separate columns because separate
+                # provenance: one is evidence, the other is a measurement of it.
+                'mime_type TEXT, referrer TEXT, tab_url TEXT, download_source TEXT, hash TEXT, guid TEXT, '
+                'body_sha256 TEXT)')
 
             c.execute(
                 'CREATE TABLE storage(type TEXT, origin TEXT, key TEXT, value TEXT, '
                 'modification_time TEXT, interpretation TEXT, profile TEXT, source_path TEXT, '
                 'database TEXT, seq INT, state INT, state_friendly TEXT, file_exists BOOL, file_size INT, '
-                'magic_results TEXT)')
+                'magic_results TEXT, file_sha256 TEXT)')
 
             c.execute(
                 'CREATE TABLE installed_extensions(name TEXT, description TEXT, version TEXT, ext_id TEXT, '
@@ -3245,11 +3257,12 @@ class AnalysisSession(object):
                 elif item.row_type.startswith('cache'):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item, '
-                        'etag, last_modified, http_headers)'
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'etag, last_modified, http_headers, body_sha256)'
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.data_summary,
                          item.locations, item.interpretation, item.profile, item.source_item,
-                         item.etag, sql_date(item.last_modified), item.http_headers_str))
+                         item.etag, sql_date(item.last_modified), item.http_headers_str,
+                         item.body_sha256))
 
                 elif item.row_type.startswith('login'):
                     c.execute(
@@ -3288,12 +3301,12 @@ class AnalysisSession(object):
                     c.execute(
                         'INSERT INTO storage (type, origin, key, value, modification_time, '
                         'interpretation, profile, source_path, seq, state, state_friendly, file_exists, file_size, '
-                        'magic_results) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'magic_results, file_sha256) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, item.origin, item.key, item.value, sql_date(item.last_modified),
                          item.interpretation, item.profile, item.source_path, item.seq,
                          state_to_int(item.state), item.state,
-                         item.file_exists, item.file_size, item.magic_results))
+                         item.file_exists, item.file_size, item.magic_results, item.file_sha256))
 
                 elif item.row_type.startswith('service worker'):
                     c.execute(

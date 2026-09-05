@@ -803,6 +803,7 @@ class WebBrowser(object):
             self.etag = None
             self.last_modified = None
             self.locations_str = None
+            self.body_sha256 = None
 
         def create_data_summary(self):
             if not self.data:
@@ -812,6 +813,28 @@ class WebBrowser(object):
                 return f"{len(self.data)} bytes"
 
             return f"{(self.metadata.get_attribute('content-type') or ['not specified'])[0]} ({len(self.data)} bytes)"
+
+        def hash_body(self, was_decompressed=False):
+            """Hash the cached response body, unless those bytes are still encoded.
+
+            The digest is worth recording because it identifies the resource, so a cached
+            copy can be matched against a file recovered anywhere else. Chrome's HTTP
+            cache stores a body as it arrived and ccl decodes it per content-encoding, but
+            returns the compressed bytes when that fails. Hashing those would give the
+            digest of a gzip stream, indistinguishable in the output from a digest of the
+            resource and matching nothing, so no hash is recorded for them.
+            """
+            if not self.data:
+                return
+
+            declared_encoding = ''
+            if self.metadata:
+                declared_encoding = (
+                    self.metadata.get_attribute('content-encoding') or [''])[0].strip()
+            if declared_encoding and not was_decompressed:
+                return
+
+            self.body_sha256 = hashlib.sha256(self.data).hexdigest()
 
         def stringify_http_headers(self):
             headers = {}
@@ -1080,7 +1103,8 @@ class WebBrowser(object):
 
     class StorageItem(object):
         def __init__(self, item_type, profile, origin, key, value=None, seq=None, state=None, source_path=None,
-                     last_modified=None, interpretation=None, file_exists=None, file_size=None, magic_results=None):
+                     last_modified=None, interpretation=None, file_exists=None, file_size=None, magic_results=None,
+                     file_sha256=None):
             self.row_type = item_type
             self.profile = profile
             self.origin = origin
@@ -1094,6 +1118,7 @@ class WebBrowser(object):
             self.file_exists = file_exists
             self.file_size = file_size
             self.magic_results = magic_results
+            self.file_sha256 = file_sha256
 
         def __lt__(self, other):
             return self.origin < other.origin
@@ -1211,11 +1236,11 @@ class WebBrowser(object):
 
     class FileSystemItem(StorageItem):
         def __init__(self, profile, origin, key, value, seq, state, source_path, last_modified=None,
-                     file_exists=None, file_size=None, magic_results=None):
+                     file_exists=None, file_size=None, magic_results=None, file_sha256=None):
             super(WebBrowser.FileSystemItem, self).__init__(
                 'file system', profile=profile, origin=origin, key=key, value=value, seq=seq, state=state,
                 source_path=source_path, last_modified=last_modified, file_exists=file_exists,
-                file_size=file_size, magic_results=magic_results)
+                file_size=file_size, magic_results=magic_results, file_sha256=file_sha256)
             self.profile = profile
             self.origin = origin
             self.key = key
@@ -1227,6 +1252,7 @@ class WebBrowser(object):
             self.file_exists = file_exists
             self.file_size = file_size
             self.magic_results = magic_results
+            self.file_sha256 = file_sha256
 
     class ServiceWorkerUserDataItem(StorageItem):
         def __init__(self, profile, scope_url, registration_id, user_data_key,
