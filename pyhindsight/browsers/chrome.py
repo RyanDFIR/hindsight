@@ -3768,6 +3768,43 @@ class Chrome(WebBrowser):
         source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
+        phantom_locations = 0
+
+        # The files this cache directory actually holds, so a location can be checked
+        # before it is reported as one.
+        try:
+            present_files = {entry.name for entry in os.scandir(cache_path_to_parse)}
+        except OSError:
+            present_files = set()
+
+        def describe_locations(entry):
+            """Say where an entry's metadata and body live, naming only files that exist.
+
+            ccl renders a blockfile address itself, and an uninitialized address comes
+            back as external file 'f_000000' at offset 0: a null Addr has
+            is_initialized False but still reports file_type EXTERNAL and file number 0,
+            and _get_location never checks the flag. Chromium never allocates external
+            file 0, so that name points at a file that has never existed. A path in the
+            output is an invitation to go and look at it, and a phantom one cannot be
+            told from a real one, so locations that do not resolve are left out.
+
+            Checking presence rather than special-casing 'f_000000' also covers a cache
+            directory that has been partially collected.
+            """
+            nonlocal phantom_locations
+            described = []
+            for label in ('metadata', 'data'):
+                location = getattr(entry, f'{label}_location', None)
+                file_name = getattr(location, 'file_name', None)
+                if not file_name:
+                    continue
+                if file_name not in present_files:
+                    phantom_locations += 1
+                    continue
+                offset = getattr(location, 'offset', None)
+                described.append(
+                    f'{label}: {file_name}' + (f' @ {offset}' if offset else ''))
+            return '; '.join(described)
 
         try:
             for cache_item in cache_items:
@@ -3793,7 +3830,7 @@ class Chrome(WebBrowser):
                     request_time=utils.to_datetime(
                         metadata.request_time.replace(tzinfo=datetime.timezone.utc),
                         self.timezone) if metadata else None,
-                    locations=str({'data': cache_item.data_location, 'metadata': cache_item.metadata_location}),
+                    locations=describe_locations(cache_item),
                     key=cache_key, metadata=metadata, data=cache_item.data, title=None)
 
                 parsed_item.row_type = row_type
@@ -3815,6 +3852,11 @@ class Chrome(WebBrowser):
         except Exception as e:
             log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
             return None
+
+        if phantom_locations:
+            log.info(f' - {phantom_locations} cache locations named a file not present in '
+                     f'{dir_name} and were omitted; ccl reports an uninitialized address '
+                     f'as external file f_000000')
 
         if untimed_entries:
             log.info(f' - {untimed_entries} cache entries had no metadata; their URL and '
