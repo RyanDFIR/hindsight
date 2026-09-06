@@ -2702,13 +2702,16 @@ class Firefox(WebBrowser):
 
                         key_str = self._decode_idb_key(key_blob) if key_blob else ''
 
-                        value_str = ''
+                        # The deserialized value is kept and rendered at output time, so
+                        # plugins get the structure rather than a re-parse of its text.
+                        # value_str is only set when there is no object to keep.
+                        value_str = None
+                        value_obj = Firefox.IndexedDBItem._NO_VALUE_OBJ
                         if data_blob:
                             try:
                                 decompressed = self._snappy_decompress(bytes(data_blob))
                                 reader = Firefox._StructuredCloneReader(self, decompressed)
                                 value_obj = reader.read()
-                                value_str = self._stringify_idb_value(value_obj)
                             except Exception as e:
                                 decode_failures += 1
                                 unparsed.record(f'{db_filename}:{key_str}',
@@ -2724,8 +2727,10 @@ class Firefox(WebBrowser):
                             value=value_str,
                             seq=seq,
                             state='Live',
-                            database=f'{db_name}.{store_name}',
+                            database=db_name,
+                            object_store=store_name,
                             source_path=source_path,
+                            value_obj=value_obj,
                         )
                         results.append(item)
                         got_any = True
@@ -3130,4 +3135,9 @@ class Firefox(WebBrowser):
         pass
 
     class IndexedDBItem(WebBrowser.IndexedDBItem):
-        pass
+        @staticmethod
+        def _render_value(value_obj):
+            # Firefox has always written its IndexedDB values as (truncated) JSON, where
+            # Chrome writes Python's repr. Rendering per browser keeps both outputs
+            # exactly as they were; unifying them is a separate decision.
+            return Firefox._stringify_idb_value(value_obj)
