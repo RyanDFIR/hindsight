@@ -827,16 +827,29 @@ class WebBrowser(object):
             if not self.data:
                 return
 
-            declared_encoding = ''
-            if self.metadata:
-                declared_encoding = (
-                    self.metadata.get_attribute('content-encoding') or [''])[0].strip()
+            if not self.metadata:
+                # Headers are what say whether these bytes are the resource or a
+                # still-encoded copy of it. Without them that cannot be established, and
+                # a digest that cannot be said to identify the resource is worse than
+                # none: it sits in the same column as every other one, looks equally
+                # authoritative, and silently fails to match.
+                return
+
+            declared_encoding = (
+                self.metadata.get_attribute('content-encoding') or [''])[0].strip()
             if declared_encoding and not was_decompressed:
                 return
 
             self.body_sha256 = hashlib.sha256(self.data).hexdigest()
 
         def stringify_http_headers(self):
+            if not self.metadata:
+                # No metadata means the headers were never recovered, which is not the
+                # same as a response that carried none. '{}' would assert the latter, so
+                # the field is left empty.
+                self.http_headers_str = ''
+                return
+
             headers = {}
             for attribute, value in self.metadata.http_header_attributes:
                 headers[attribute] = value

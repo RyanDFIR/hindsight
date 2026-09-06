@@ -2,7 +2,7 @@
   "data_types": {
     "chrome:autofill:entry": 22,
     "chrome:bookmark:entry": 2,
-    "chrome:cache:entry": 13318,
+    "chrome:cache:entry": 17764,
     "chrome:cookie:entry": 5570,
     "chrome:extension:installed": 16,
     "chrome:extension_storage:entry": 19522,
@@ -28,7 +28,7 @@
     "chrome:sync_data:entry": 8354
   },
   "generated_by": {
-    "generated_utc": "2026-09-04T17:01:42Z",
+    "generated_utc": "2026-09-06T00:32:38Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -47,9 +47,9 @@
           "unparsed_sources": 0
         },
         "Cache": {
-          "count": 6740,
-          "status": "partial",
-          "unparsed_records": 4428,
+          "count": 11168,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "Cookies": {
@@ -119,9 +119,9 @@
           "unparsed_sources": 0
         },
         "GPUCache": {
-          "count": 0,
-          "status": "partial",
-          "unparsed_records": 12,
+          "count": 12,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "HSTS": {
@@ -256,9 +256,9 @@
           "unparsed_sources": 0
         },
         "Cache": {
-          "count": 3887,
-          "status": "partial",
-          "unparsed_records": 4,
+          "count": 3891,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "Cookies": {
@@ -316,9 +316,9 @@
           "unparsed_sources": 0
         },
         "GPUCache": {
-          "count": 0,
-          "status": "partial",
-          "unparsed_records": 2,
+          "count": 2,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "HSTS": {
@@ -422,5 +422,5 @@
     }
   },
   "root": "bf4sa_2026_bob-2",
-  "total_records": 75447
+  "total_records": 79893
 }

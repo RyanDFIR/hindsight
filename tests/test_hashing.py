@@ -169,13 +169,33 @@ class TestCacheBodyHash(unittest.TestCase):
         self.assertEqual('https://example.test/logo.png', item.url)
         self.assertEqual(f'image/png ({len(PNG_BYTES)} bytes)', item.create_data_summary())
 
-    def test_an_entry_without_metadata_still_hashes(self):
-        # No headers means no declared encoding to disqualify the bytes.
-        item = WebBrowser.CacheItem(
+    def test_an_entry_without_metadata_is_not_hashed(self):
+        # Headers are what establish whether the bytes on disk are the resource. Without
+        # them the question is unanswerable, so no digest is recorded, for the same
+        # reason a body that failed to decompress gets none.
+        item = self._no_metadata_item()
+        item.hash_body()
+        self.assertIsNone(item.body_sha256)
+
+    def test_the_rest_of_an_entry_without_metadata_survives(self):
+        # Withholding the digest must not cost the entry. Its URL is on the key, not in
+        # the metadata, so the row still reports what was cached and how large it was.
+        item = self._no_metadata_item()
+        self.assertEqual('https://example.test/', item.url)
+        self.assertEqual(f'{len(PNG_BYTES)} bytes', item.create_data_summary())
+
+    def test_an_entry_without_metadata_reports_no_headers_rather_than_none(self):
+        # '{}' would assert a response that carried no headers, which is a different
+        # finding from headers that were never recovered.
+        item = self._no_metadata_item()
+        item.stringify_http_headers()
+        self.assertEqual('', item.http_headers_str)
+
+    @staticmethod
+    def _no_metadata_item():
+        return WebBrowser.CacheItem(
             profile='p', url='https://example.test/', title=None,
             request_time=None, locations='{}', key='k', metadata=None, data=PNG_BYTES)
-        item.hash_body()
-        self.assertEqual(PNG_SHA256, item.body_sha256)
 
 
 def _file_system_item(sha256):

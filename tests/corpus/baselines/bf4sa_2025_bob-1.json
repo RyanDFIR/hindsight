@@ -2,7 +2,7 @@
   "data_types": {
     "chrome:autofill:entry": 12,
     "chrome:bookmark:entry": 2,
-    "chrome:cache:entry": 8227,
+    "chrome:cache:entry": 8837,
     "chrome:cookie:entry": 4738,
     "chrome:extension:installed": 14,
     "chrome:extension_storage:entry": 2967,
@@ -28,7 +28,7 @@
     "chrome:sync_data:entry": 3673
   },
   "generated_by": {
-    "generated_utc": "2026-09-04T17:01:08Z",
+    "generated_utc": "2026-09-06T00:32:15Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -47,9 +47,9 @@
           "unparsed_sources": 0
         },
         "Cache": {
-          "count": 6397,
-          "status": "partial",
-          "unparsed_records": 601,
+          "count": 6998,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "Cookies": {
@@ -113,9 +113,9 @@
           "unparsed_sources": 0
         },
         "GPUCache": {
-          "count": 0,
-          "status": "partial",
-          "unparsed_records": 9,
+          "count": 9,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "HSTS": {
@@ -398,5 +398,5 @@
     }
   },
   "root": "bf4sa_2025_bob-1",
-  "total_records": 64724
+  "total_records": 65334
 }
