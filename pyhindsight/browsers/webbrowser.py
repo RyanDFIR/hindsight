@@ -802,7 +802,6 @@ class WebBrowser(object):
             self.http_headers_str = None
             self.etag = None
             self.last_modified = None
-            self.locations_str = None
             self.body_sha256 = None
 
         def create_data_summary(self):

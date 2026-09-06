@@ -2131,7 +2131,10 @@ class Firefox(WebBrowser):
                 url=parsed['url'],
                 title=None,
                 request_time=request_time,
-                locations=name,
+                # Firefox names a cache2 entry file after the SHA-1 of its cache key, so
+                # the bare name reads as a hash rather than as the location it is. The
+                # label says which it is, and matches the Cache API rows below.
+                locations=f'entry: {name}',
                 key=parsed['key'],
                 metadata=None,
                 data=None,
