@@ -3767,28 +3767,40 @@ class Chrome(WebBrowser):
         cache_items = profile.iterate_cache(url=None, omit_cached_data=False)
         source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
+        untimed_entries = 0
 
         try:
             for cache_item in cache_items:
-                if not cache_item.metadata:
-                    # No metadata means no URL, timestamp, or headers to attribute the
-                    # entry to; it is dropped, so say so rather than quietly shrinking
-                    # the count.
-                    unparsed.record(str(getattr(cache_item, 'key', '<unknown key>')),
-                                  'cache entry has no metadata')
+                cache_key = getattr(cache_item, 'key', None)
+                if cache_key is None:
+                    # Without a key there is no URL either, so nothing identifies what
+                    # was cached. This one really cannot be reported.
+                    unparsed.record('<unknown key>', 'cache entry has no key')
                     continue
 
+                metadata = cache_item.metadata
+                if not metadata:
+                    # No metadata means no fetch time and no headers, but the URL lives on
+                    # the key, not in the metadata, and a cache entry is evidence that the
+                    # resource was cached whether or not its time survived. The row is
+                    # kept untimed rather than dropped: the Timeline sorts untimed
+                    # artifacts last and JSONL labels them 'Not a time', so an absent time
+                    # is reported as absent instead of being invented or losing the URL.
+                    untimed_entries += 1
+
                 parsed_item = WebBrowser.CacheItem(
-                    profile=self.profile_path, url=cache_item.key.url,
-                    request_time=utils.to_datetime(cache_item.metadata.request_time.replace(tzinfo=datetime.timezone.utc), self.timezone),
+                    profile=self.profile_path, url=cache_key.url,
+                    request_time=utils.to_datetime(
+                        metadata.request_time.replace(tzinfo=datetime.timezone.utc),
+                        self.timezone) if metadata else None,
                     locations=str({'data': cache_item.data_location, 'metadata': cache_item.metadata_location}),
-                    key=cache_item.key, metadata=cache_item.metadata, data=cache_item.data, title=None)
+                    key=cache_key, metadata=metadata, data=cache_item.data, title=None)
 
                 parsed_item.row_type = row_type
                 parsed_item.data_summary = parsed_item.create_data_summary()
                 parsed_item.stringify_http_headers()
-                parsed_item.etag = (cache_item.metadata.get_attribute("etag") or [""])[0]
-                parsed_item.last_modified = (cache_item.metadata.get_attribute("last-modified") or [""])[0]
+                parsed_item.etag = (metadata.get_attribute("etag") or [""])[0] if metadata else ''
+                parsed_item.last_modified = (metadata.get_attribute("last-modified") or [""])[0] if metadata else ''
                 # The body is already in memory (omit_cached_data=False), so this costs
                 # no extra reads.
                 parsed_item.hash_body(cache_item.was_decompressed)
@@ -3803,6 +3815,10 @@ class Chrome(WebBrowser):
         except Exception as e:
             log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
             return None
+
+        if untimed_entries:
+            log.info(f' - {untimed_entries} cache entries had no metadata; their URL and '
+                     f'body are reported but they carry no request time or headers')
 
         if unhashed_bodies:
             log.warning(f' - {unhashed_bodies} cached bodies were not hashed; their '

@@ -1,7 +1,7 @@
 {
   "data_types": {
     "chrome:autofill:entry": 24,
-    "chrome:cache:entry": 19593,
+    "chrome:cache:entry": 21368,
     "chrome:cookie:entry": 1966,
     "chrome:extension:installed": 48,
     "chrome:extension_storage:entry": 2,
@@ -27,7 +27,7 @@
     "chrome:sync_data:entry": 1732
   },
   "generated_by": {
-    "generated_utc": "2026-09-04T17:02:33Z",
+    "generated_utc": "2026-09-06T00:33:09Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -40,9 +40,9 @@
           "unparsed_sources": 0
         },
         "Cache": {
-          "count": 7238,
-          "status": "partial",
-          "unparsed_records": 10,
+          "count": 7248,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "Cookies": {
@@ -296,9 +296,9 @@
           "unparsed_sources": 0
         },
         "Cache": {
-          "count": 9322,
-          "status": "partial",
-          "unparsed_records": 1763,
+          "count": 11085,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "Cookies": {
@@ -552,9 +552,9 @@
           "unparsed_sources": 0
         },
         "Cache": {
-          "count": 2085,
-          "status": "partial",
-          "unparsed_records": 2,
+          "count": 2087,
+          "status": null,
+          "unparsed_records": 0,
           "unparsed_sources": 0
         },
         "Cookies": {
@@ -688,5 +688,5 @@
     }
   },
   "root": "magnet.ctf_2023",
-  "total_records": 36645
+  "total_records": 38420
 }
