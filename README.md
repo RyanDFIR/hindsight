@@ -94,3 +94,8 @@ The Chrome default profile folder default locations are:
 ## Feature Requests
 
 Please [file an issue](https://github.com/RyanDFIR/hindsight/issues/new/choose) if you have an idea for a new feature (or spotted something broken).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up, run the two test suites, and get
+the browser profile corpus the end-to-end tests parse.
