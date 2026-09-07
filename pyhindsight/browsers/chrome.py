@@ -52,6 +52,12 @@ SECONDARY_CACHE_DIRS = [
     ('DawnGraphiteCache', 'dawn graphite', 'dawn-cache'),
 ]
 
+# The Site Characteristics LevelDB carries a `database_metadata` record whose value is
+# the store's bare schema version. This is the one this parser's SiteDataProto was built
+# against; anything else is parsed anyway but reported, since a schema change is exactly
+# what would make the output quietly wrong.
+SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
+
 
 class Chrome(WebBrowser):
     def __init__(self, profile_path, browser_name=None, cache_path=None, version=None, timezone=None,
@@ -4599,8 +4605,27 @@ class Chrome(WebBrowser):
                 from pyhindsight.lib.proto.components.performance_manager.persistence.site_data.site_data_pb2 import SiteDataProto
 
                 if item['key'] == b'database_metadata':
-                    if item['value'] != b'1':
-                        log.warning(f' - Expected type 1; got type {item["value"].encode()}. Trying to parse anyway.')
+                    # Bookkeeping, not a SiteDataProto: the value is the store's bare
+                    # schema version. Surface it as parser context rather than dropping
+                    # it on the floor, then skip the record.
+                    #
+                    # The version warning used to call .encode() on item['value'], which
+                    # is bytes and so has no .encode(). On any store not at the expected
+                    # version -- b'2' is in the wild -- that raised AttributeError before
+                    # reaching the `continue`, and the record surfaced through the outer
+                    # handler as `Exception parsing SiteDataProto`. It fires on healthy
+                    # profiles, so it was pure noise, and noise that trains the reader to
+                    # skim past errors in the log.
+                    schema_version = item['value'].decode('utf-8', errors='replace')
+                    if item['value'] == SITE_CHARACTERISTICS_SCHEMA_VERSION:
+                        log.info(f' - Site Characteristics schema version {schema_version}')
+                    else:
+                        # The remaining records are still parsed; only this one is skipped.
+                        log.warning(
+                            f' - Site Characteristics schema version {schema_version}; this parser '
+                            f'was written against version '
+                            f'{SITE_CHARACTERISTICS_SCHEMA_VERSION.decode()}. Parsing the records '
+                            f'anyway.')
                     continue
 
                 raw_proto = item['value']
