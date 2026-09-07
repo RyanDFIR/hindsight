@@ -248,8 +248,9 @@ def main():
     # Print input & output directories
     analysis_session.input_path = args.input
     output_name = f'{analysis_session.output_name}.{analysis_session.selected_output_format}'
-    # Find browser profiles early so we can display the count
-    profile_paths = analysis_session.find_browser_profiles(args.input)
+    # Find browser profiles early so we can display the count. run() searches
+    # again; warn=False keeps the "no profiles found" warning to a single line.
+    profile_paths = analysis_session.find_browser_profiles(args.input, warn=False)
     profile_count = len(profile_paths)
     console.rule("Processing", style="green")
     meta_table = rich.table.Table(show_header=False, box=None)
@@ -257,7 +258,13 @@ def main():
     meta_table.add_column("Value", overflow="fold")
     meta_table.add_row("Start time", start_time)
     meta_table.add_row("Input directory", args.input)
-    meta_table.add_row("Profiles found", str(profile_count))
+    if analysis_session.used_input_path_as_profile:
+        # The search found nothing and fell back to the input path itself. Saying
+        # "1" here reads as a success right next to the warning that says otherwise.
+        meta_table.add_row(
+            "Profiles found", "[yellow]0 (parsing the input path as a profile)[/yellow]")
+    else:
+        meta_table.add_row("Profiles found", str(profile_count))
     if analysis_session.artifact_filter.is_active:
         meta_table.add_row("Artifacts", analysis_session.artifact_filter.describe())
     if args.browser_type:

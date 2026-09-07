@@ -715,6 +715,9 @@ class AnalysisSession(object):
         self.fatal_error = None
         # {profile_path: detected family}; populated by find_browser_profiles().
         self.detected_profile_families = {}
+        # True when the search found no profile and fell back to treating the
+        # input path as one; set by find_browser_profiles().
+        self.used_input_path_as_profile = False
 
         if self.version is None:
             self.version = []
@@ -1027,7 +1030,7 @@ class AnalysisSession(object):
     }
 
     @staticmethod
-    def is_profile(base_path, existing_files, warn=False):
+    def is_profile(base_path, existing_files):
         """Return the detected browser engine family for `base_path`, or None.
 
         A Chromium profile (Chrome/Edge/Brave/...) has a ``History`` SQLite file;
@@ -1042,9 +1045,6 @@ class AnalysisSession(object):
             if required_file in existing_files and os.path.isfile(os.path.join(base_path, required_file)):
                 return family
 
-        if warn:
-            log.warning(f"The profile directory {base_path} does not contain a recognized "
-                        f"browser history file (History or places.sqlite). Analysis may not be very useful.")
         return None
 
     @classmethod
@@ -1132,22 +1132,33 @@ class AnalysisSession(object):
                     found_profile_paths.extend(profile_found_in_subdir)
         return found_profile_paths
 
-    def find_browser_profiles(self, base_path):
+    def find_browser_profiles(self, base_path, warn=True):
         """Search a path for browser profiles, detecting each profile's browser family.
 
         Records the detected family (Chrome/Firefox) per profile path in
         ``self.detected_profile_families`` so ``run()`` can dispatch the right
         pipeline per profile when no ``-b`` override is given.
+
+        Set ``warn=False`` to suppress the "no profiles found" warning; callers
+        that run the search a second time (the early profile count in
+        ``hindsight.py``) use it so the warning is logged once, not twice.
+
+        When nothing is found the input path itself is returned as a last-resort
+        profile, and ``self.used_input_path_as_profile`` is set so callers can
+        tell that fallback apart from a real single-profile result.
         """
         # Reset detection state so a re-run (and the early count in hindsight.py)
         # don't accumulate stale entries.
         self.detected_profile_families = {}
+        self.used_input_path_as_profile = False
         found_profile_paths = []
         base_dir_listing = os.listdir(base_path)
 
         # A recognized history file (Chrome 'History' or Firefox 'places.sqlite')
-        # is the minimum required for useful analysis. Warn if not present.
-        family = self.is_profile(base_path, base_dir_listing, warn=True)
+        # is the minimum required for useful analysis. Its absence here says
+        # nothing yet: an app-data root is not itself a profile, and the profiles
+        # under it are found by the search below.
+        family = self.is_profile(base_path, base_dir_listing)
         if family:
             found_profile_paths.append(base_path)
             self.detected_profile_families[base_path] = \
@@ -1160,7 +1171,13 @@ class AnalysisSession(object):
         # If we did not find any valid Profiles, attempt to process the input
         # path as a Profile
         if not found_profile_paths:
-            log.warning("No Profile paths found; processing input path as a Profile")
+            if warn:
+                log.warning(
+                    f"No browser profiles found under {base_path}; neither a Chrome 'History' "
+                    f"file nor a Firefox 'places.sqlite' is present there or in any "
+                    f"subdirectory. Processing the input path as a Profile; analysis may not "
+                    f"be very useful.")
+            self.used_input_path_as_profile = True
             found_profile_paths = [base_path]
 
         log.debug("Profile paths: " + str(found_profile_paths))
