@@ -248,8 +248,9 @@ def main():
     # Print input & output directories
     analysis_session.input_path = args.input
     output_name = f'{analysis_session.output_name}.{analysis_session.selected_output_format}'
-    # Find browser profiles early so we can display the count
-    profile_paths = analysis_session.find_browser_profiles(args.input)
+    # Find browser profiles early so we can display the count. run() searches
+    # again; warn=False keeps the "no profiles found" warning to a single line.
+    profile_paths = analysis_session.find_browser_profiles(args.input, warn=False)
     profile_count = len(profile_paths)
     console.rule("Processing", style="green")
     meta_table = rich.table.Table(show_header=False, box=None)
