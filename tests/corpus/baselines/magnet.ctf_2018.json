@@ -23,7 +23,7 @@
     "chrome:sync_data:entry": 1
   },
   "generated_by": {
-    "generated_utc": "2026-09-06T00:32:43Z",
+    "generated_utc": "2026-09-07T18:11:34Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -60,10 +60,10 @@
           "unparsed_sources": 0
         },
         "Extensions": {
-          "count": 3,
-          "status": "partial",
+          "count": 4,
+          "status": null,
           "unparsed_records": 0,
-          "unparsed_sources": 1
+          "unparsed_sources": 0
         },
         "HSTS": {
           "count": 5,

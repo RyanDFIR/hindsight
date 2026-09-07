@@ -54,6 +54,46 @@ class TestExtensionVersionDirectories(unittest.TestCase):
             # first place (a string sort would pick 1.2.3).
             self.assertEqual('New', manifest['name'])
 
+    def test_a_single_component_version_directory_is_found(self):
+        # Early Chrome unpacked extensions to names like `7_0`, with no dot. Globbing
+        # for `*.*_*` never matched those, so a fully intact extension was reported
+        # unreadable.
+        with tempfile.TemporaryDirectory() as tmp:
+            ext = self._extension(tmp, {'7_0': {'name': 'Mail', 'version': '7'}})
+            manifest, version = Chrome.load_extension_manifest(ext)
+            self.assertEqual('Mail', manifest['name'])
+            self.assertEqual('7_0', version)
+
+    def test_the_last_component_is_ordered_numerically(self):
+        # The `_<n>` suffix rides on the last component, so `3_0` and `10_0` used to be
+        # compared as text and picked 1.2.3 as newer than 1.2.10.
+        with tempfile.TemporaryDirectory() as tmp:
+            ext = self._extension(tmp, {
+                '1.2.3_0': {'name': 'Old', 'version': '1.2.3'},
+                '1.2.10_0': {'name': 'New', 'version': '1.2.10'},
+            })
+            manifest, version = Chrome.load_extension_manifest(ext)
+            self.assertEqual('New', manifest['name'])
+            self.assertEqual('1.2.10_0', version)
+
+    def test_single_component_versions_are_ordered_numerically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ext = self._extension(tmp, {
+                '7_0': {'name': 'Old', 'version': '7'},
+                '10_0': {'name': 'New', 'version': '10'},
+            })
+            manifest, version = Chrome.load_extension_manifest(ext)
+            self.assertEqual('New', manifest['name'])
+
+    def test_a_stray_file_is_not_mistaken_for_a_version_directory(self):
+        # $I30 from FTK has no underscore, but other strays do; only directories hold
+        # a manifest.
+        with tempfile.TemporaryDirectory() as tmp:
+            ext = self._extension(tmp, {'1.0.0_0': {'name': 'Good', 'version': '1.0.0'}})
+            (ext / 'zz_notes.txt').write_text('stray', encoding='utf-8')
+            manifest, version = Chrome.load_extension_manifest(ext)
+            self.assertEqual('Good', manifest['name'])
+
     def test_missing_manifest_returns_none_rather_than_raising(self):
         with tempfile.TemporaryDirectory() as tmp:
             ext = pathlib.Path(tmp, 'abcdefghijklmnopabcdefghijklmnop')
