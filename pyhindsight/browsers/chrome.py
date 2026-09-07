@@ -2134,16 +2134,27 @@ class Chrome(WebBrowser):
     def load_extension_manifest(extension_path):
         # Get listing of the contents of extension_id directory;
         # this should contain subdirectories for each version of the extension.
-        # Glob should filter out extraneous files (like $I30 from FTK).
-        ext_version_listing = list(pathlib.Path(extension_path).glob("*.*_*"))
+        # The real marker of a version directory is the trailing `_<n>` unpack counter,
+        # not a dot: a single-component version is unpacked to `7_0`, with no dot at all.
+        # Globbing "*.*_*" required one and so never found those, and the extension was
+        # reported unreadable with its manifest.json sitting there intact. Filter to
+        # directories, which is what the old glob's dot was really buying (it also kept
+        # out extraneous files like $I30 from FTK).
+        ext_version_listing = [
+            path for path in pathlib.Path(extension_path).glob("*_*") if path.is_dir()]
 
         # Connect to manifest.json in the latest version directory
         # The version could be missing leading zeros in the string, so this sort accounts
         # for that. Non-numeric components sort last rather than raising: one oddly-named
         # directory used to abort the whole Extensions parse.
         def version_sort_key(version_dir):
+            # Strip the `_<n>` unpack counter before splitting on '.'. It is not part of
+            # the version, and leaving it on made the *last* component of every ordinary
+            # name non-numeric ('3_0', not '3'), so every name fell to the string branch
+            # there: 1.2.3_0 then sorted above 1.2.10_0 because '3_0' > '10_0'.
+            version, _, _ = version_dir.name.rpartition('_')
             parts = []
-            for part in version_dir.name.split('.'):
+            for part in (version or version_dir.name).split('.'):
                 # The sort is reverse=True (newest first), so a non-numeric component
                 # ranks *below* every numeric one to land last: a malformed directory
                 # should never be preferred over a real version, and must not crash the
