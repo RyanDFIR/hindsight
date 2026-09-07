@@ -94,6 +94,17 @@ class TestExtensionVersionDirectories(unittest.TestCase):
             manifest, version = Chrome.load_extension_manifest(ext)
             self.assertEqual('Good', manifest['name'])
 
+    def test_a_non_ascii_digit_does_not_raise(self):
+        # str.isdigit() is true for characters like the superscript '2', which int()
+        # then refuses, so testing it alone put the ValueError back into the sort.
+        with tempfile.TemporaryDirectory() as tmp:
+            ext = self._extension(tmp, {
+                '1.0.0_0': {'name': 'Good', 'version': '1.0.0'},
+                '²_0': {'name': 'Odd', 'version': '?'},
+            })
+            manifest, version = Chrome.load_extension_manifest(ext)
+            self.assertEqual('Good', manifest['name'])
+
     def test_missing_manifest_returns_none_rather_than_raising(self):
         with tempfile.TemporaryDirectory() as tmp:
             ext = pathlib.Path(tmp, 'abcdefghijklmnopabcdefghijklmnop')

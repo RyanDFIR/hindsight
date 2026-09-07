@@ -2149,8 +2149,11 @@ class Chrome(WebBrowser):
             # The sort is reverse=True (newest first), so a non-numeric component
             # ranks *below* every numeric one to land last: a malformed directory
             # should never be preferred over a real version, and must not crash the
-            # comparison the way int(part) did.
-            return (1, int(part), '') if part.isdigit() else (0, 0, part)
+            # comparison the way int(part) did. isdigit() alone is not enough of a
+            # guard, since it is true for characters like the superscript '2' that
+            # int() then rejects.
+            numeric = part.isascii() and part.isdigit()
+            return (1, int(part), '') if numeric else (0, 0, part)
 
         def version_sort_key(version_dir):
             # Split the `_<n>` suffix off before splitting the version on '.'. Left
