@@ -85,14 +85,34 @@ class TestExtensionVersionDirectories(unittest.TestCase):
             manifest, version = Chrome.load_extension_manifest(ext)
             self.assertEqual('New', manifest['name'])
 
-    def test_a_stray_file_is_not_mistaken_for_a_version_directory(self):
-        # $I30 from FTK has no underscore, but other strays do; only directories hold
-        # a manifest.
+    def test_single_and_multi_component_versions_order_together(self):
+        # Widening the glob means both shapes can now appear side by side, so they have
+        # to compare against each other and not just among themselves: 7 > 1.2.3.
+        with tempfile.TemporaryDirectory() as tmp:
+            ext = self._extension(tmp, {
+                '7_0': {'name': 'Single', 'version': '7'},
+                '1.2.3_0': {'name': 'Multi', 'version': '1.2.3'},
+            })
+            manifest, version = Chrome.load_extension_manifest(ext)
+            self.assertEqual('Single', manifest['name'])
+            self.assertEqual('7_0', version)
+
+    def test_a_non_directory_matching_the_glob_is_ignored(self):
+        # The old glob's dot also kept out extraneous files such as $I30 from FTK.
+        # Widening it to "*_*" gives that job to the is_dir() filter instead. `.tmp`
+        # here is deliberately a name that sorts *first*, so without the filter it is
+        # the one the sort reaches for before anything else. It still lands on the right
+        # manifest either way, because opening a path under a file raises OSError and the
+        # loop moves on, so the assertion that earns its keep is the quiet log: the right
+        # answer reached by way of a logged error is not the same as the right answer.
         with tempfile.TemporaryDirectory() as tmp:
             ext = self._extension(tmp, {'1.0.0_0': {'name': 'Good', 'version': '1.0.0'}})
-            (ext / 'zz_notes.txt').write_text('stray', encoding='utf-8')
-            manifest, version = Chrome.load_extension_manifest(ext)
+            (ext / '9.9.9_0.tmp').write_text('not a directory', encoding='utf-8')
+            (ext / '$I30_junk').write_text('not a directory', encoding='utf-8')
+            with self.assertNoLogs('pyhindsight.browsers.chrome', level='ERROR'):
+                manifest, version = Chrome.load_extension_manifest(ext)
             self.assertEqual('Good', manifest['name'])
+            self.assertEqual('1.0.0_0', version)
 
     def test_a_non_ascii_digit_does_not_raise(self):
         # str.isdigit() is true for characters like the superscript '2', which int()
