@@ -715,6 +715,9 @@ class AnalysisSession(object):
         self.fatal_error = None
         # {profile_path: detected family}; populated by find_browser_profiles().
         self.detected_profile_families = {}
+        # True when the search found no profile and fell back to treating the
+        # input path as one; set by find_browser_profiles().
+        self.used_input_path_as_profile = False
 
         if self.version is None:
             self.version = []
@@ -1139,10 +1142,15 @@ class AnalysisSession(object):
         Set ``warn=False`` to suppress the "no profiles found" warning; callers
         that run the search a second time (the early profile count in
         ``hindsight.py``) use it so the warning is logged once, not twice.
+
+        When nothing is found the input path itself is returned as a last-resort
+        profile, and ``self.used_input_path_as_profile`` is set so callers can
+        tell that fallback apart from a real single-profile result.
         """
         # Reset detection state so a re-run (and the early count in hindsight.py)
         # don't accumulate stale entries.
         self.detected_profile_families = {}
+        self.used_input_path_as_profile = False
         found_profile_paths = []
         base_dir_listing = os.listdir(base_path)
 
@@ -1169,6 +1177,7 @@ class AnalysisSession(object):
                     f"file nor a Firefox 'places.sqlite' is present there or in any "
                     f"subdirectory. Processing the input path as a Profile; analysis may not "
                     f"be very useful.")
+            self.used_input_path_as_profile = True
             found_profile_paths = [base_path]
 
         log.debug("Profile paths: " + str(found_profile_paths))

@@ -258,7 +258,13 @@ def main():
     meta_table.add_column("Value", overflow="fold")
     meta_table.add_row("Start time", start_time)
     meta_table.add_row("Input directory", args.input)
-    meta_table.add_row("Profiles found", str(profile_count))
+    if analysis_session.used_input_path_as_profile:
+        # The search found nothing and fell back to the input path itself. Saying
+        # "1" here reads as a success right next to the warning that says otherwise.
+        meta_table.add_row(
+            "Profiles found", "[yellow]0 (parsing the input path as a profile)[/yellow]")
+    else:
+        meta_table.add_row("Profiles found", str(profile_count))
     if analysis_session.artifact_filter.is_active:
         meta_table.add_row("Artifacts", analysis_session.artifact_filter.describe())
     if args.browser_type:

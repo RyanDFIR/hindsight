@@ -41,7 +41,8 @@ class TestProfileDiscoveryWarning(unittest.TestCase):
 
     def warnings_from(self, base_path, **kwargs):
         self.handler.records = []
-        found = AnalysisSession().find_browser_profiles(base_path, **kwargs)
+        self.session = AnalysisSession()
+        found = self.session.find_browser_profiles(base_path, **kwargs)
         warnings = [r.getMessage() for r in self.handler.records
                     if r.levelno >= logging.WARNING]
         return found, warnings
@@ -60,6 +61,7 @@ class TestProfileDiscoveryWarning(unittest.TestCase):
 
         self.assertEqual({default, second}, set(found))
         self.assertEqual([], warnings)
+        self.assertFalse(self.session.used_input_path_as_profile)
 
     def test_profile_passed_directly_warns_nothing(self):
         default = self.make_chrome_profile('Default')
@@ -68,6 +70,7 @@ class TestProfileDiscoveryWarning(unittest.TestCase):
 
         self.assertEqual([default], found)
         self.assertEqual([], warnings)
+        self.assertFalse(self.session.used_input_path_as_profile)
 
     def test_path_with_no_profile_anywhere_below_it_warns_once(self):
         os.makedirs(os.path.join(self.root, 'sub', 'deeper'))
@@ -75,8 +78,10 @@ class TestProfileDiscoveryWarning(unittest.TestCase):
 
         found, warnings = self.warnings_from(self.root)
 
-        # The input path is still processed as a profile, as a last resort.
+        # The input path is still processed as a profile, as a last resort, but
+        # the caller can tell that apart from a genuine single-profile result.
         self.assertEqual([self.root], found)
+        self.assertTrue(self.session.used_input_path_as_profile)
         self.assertEqual(1, len(warnings), warnings)
         self.assertIn('No browser profiles found', warnings[0])
         self.assertIn(self.root, warnings[0])
@@ -88,6 +93,8 @@ class TestProfileDiscoveryWarning(unittest.TestCase):
 
         self.assertEqual([self.root], found)
         self.assertEqual([], warnings)
+        # Silencing the warning must not silence the fallback itself.
+        self.assertTrue(self.session.used_input_path_as_profile)
 
 
 if __name__ == '__main__':
