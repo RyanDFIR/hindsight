@@ -2134,22 +2134,36 @@ class Chrome(WebBrowser):
     def load_extension_manifest(extension_path):
         # Get listing of the contents of extension_id directory;
         # this should contain subdirectories for each version of the extension.
-        # Glob should filter out extraneous files (like $I30 from FTK).
-        ext_version_listing = list(pathlib.Path(extension_path).glob("*.*_*"))
+        # Version directories are named `<version>_<n>`, so the trailing `_<n>` is the real
+        # marker; matching on it (rather than on a dot) still filters out extraneous files
+        # like $I30 from FTK, while keeping single-component versions such as `7_0`, which
+        # were common in early Chrome and were previously never found at all.
+        ext_version_listing = [
+            entry for entry in pathlib.Path(extension_path).glob("*_*") if entry.is_dir()]
 
         # Connect to manifest.json in the latest version directory
         # The version could be missing leading zeros in the string, so this sort accounts
         # for that. Non-numeric components sort last rather than raising: one oddly-named
         # directory used to abort the whole Extensions parse.
+        def component_key(part):
+            # The sort is reverse=True (newest first), so a non-numeric component
+            # ranks *below* every numeric one to land last: a malformed directory
+            # should never be preferred over a real version, and must not crash the
+            # comparison the way int(part) did. isdigit() alone is not enough of a
+            # guard, since it is true for characters like the superscript '2' that
+            # int() then rejects.
+            numeric = part.isascii() and part.isdigit()
+            return (1, int(part), '') if numeric else (0, 0, part)
+
         def version_sort_key(version_dir):
-            parts = []
-            for part in version_dir.name.split('.'):
-                # The sort is reverse=True (newest first), so a non-numeric component
-                # ranks *below* every numeric one to land last: a malformed directory
-                # should never be preferred over a real version, and must not crash the
-                # comparison the way int(part) did.
-                parts.append((1, int(part), '') if part.isdigit() else (0, 0, part))
-            return parts
+            # Split the `_<n>` suffix off before splitting the version on '.'. Left
+            # attached it mis-orders the last component: '3_0' is not a digit string, so it
+            # compared as text and ranked 1.2.3_0 above 1.2.10_0, and int('3_0') is 30 to
+            # Python, since underscores are legal in integer literals.
+            version, separator, suffix = version_dir.name.rpartition('_')
+            if not separator:
+                version, suffix = version_dir.name, ''
+            return [component_key(part) for part in version.split('.')], component_key(suffix)
 
         for version in sorted(ext_version_listing, reverse=True, key=version_sort_key):
             manifest_path = version / 'manifest.json'
