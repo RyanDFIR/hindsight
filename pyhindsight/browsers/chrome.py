@@ -52,6 +52,14 @@ SECONDARY_CACHE_DIRS = [
     ('DawnGraphiteCache', 'dawn graphite', 'dawn-cache'),
 ]
 
+# Most records read from one IndexedDB store directory before the rest are left
+# unread. This replaces a skip hard-coded to one extension's store, which protected
+# against exactly that one known-large store and nothing else. The cap is measured
+# rather than named, so any large store is covered, and it truncates rather than
+# skipping: a capped store yields its first records plus a note through
+# `unparsed.source`, where the hard-coded rule yielded nothing at all.
+INDEXEDDB_MAX_RECORDS_PER_STORE = 100_000
+
 
 class Chrome(WebBrowser):
     def __init__(self, profile_path, browser_name=None, cache_path=None, version=None, timezone=None,
@@ -79,6 +87,10 @@ class Chrome(WebBrowser):
         self.hsts_hashes = {}
         self.kg_entities = {}
         self.originator_guids = originator_guids
+        # Per-store IndexedDB record cap. An instance attribute rather than a bare
+        # module read, so a caller with a known-good corpus can raise it (or set it to
+        # None to disable the cap) without patching the module.
+        self.indexeddb_max_records_per_store = INDEXEDDB_MAX_RECORDS_PER_STORE
 
         if self.originator_guids is None:
             self.originator_guids = {}
@@ -2040,19 +2052,17 @@ class Chrome(WebBrowser):
                 continue
             leveldb_dirs_read += 1
 
-            # The Ghostery extension has 1M+ records in it; skip for now. Recorded
-            # as an unparsed source rather than skipped silently -- an examiner needs to
-            # know this origin was never read, not infer it from its absence.
-            if storage_directory == 'chrome-extension_mlomiejdfkolichcflejclcbmpeaniij_0.indexeddb.leveldb':
-                unparsed.source(storage_directory,
-                              'skipped by hard-coded rule (very large store)')
-                continue
-
             origin = storage_directory.split('.indexeddb')[0]
             blob_directory = None
             blob_path = os.path.join(idb_path, f'{origin}.indexeddb.blob')
             if os.path.exists(blob_path):
                 blob_directory = blob_path
+
+            # Budget for this store directory, not for the run: one huge store must not
+            # eat the allowance of the ones after it.
+            store_budget = self.indexeddb_max_records_per_store
+            store_records = 0
+            truncated = False
 
             origin_idb = None
             try:
@@ -2060,11 +2070,24 @@ class Chrome(WebBrowser):
                     leveldb_dir=os.path.join(idb_path, f'{origin}.indexeddb.leveldb'), leveldb_blob_dir=blob_directory)
 
                 for database_id in origin_idb.database_ids:
+                    if truncated:
+                        break
                     database = origin_idb[database_id.dbid_no]
                     for obj_store_name in database.object_store_names:
+                        if truncated:
+                            break
                         obj_store = database.get_object_store_by_name(obj_store_name)
                         try:
                             for record in obj_store.iterate_records():
+                                # Checked before the record is built, so the cap bounds
+                                # the work done and not merely the rows kept: iterating a
+                                # million-record store is the hang, and resolving each
+                                # record's blob refs is the memory.
+                                if store_budget is not None and store_records >= store_budget:
+                                    truncated = True
+                                    break
+                                store_records += 1
+
                                 record_state = 'Deleted'
                                 if record.is_live:
                                     record_state = 'Live'
@@ -2119,6 +2142,16 @@ class Chrome(WebBrowser):
             finally:
                 if origin_idb is not None:
                     origin_idb.close()
+
+            if truncated:
+                # Reported through the same channel the hard-coded skip used, so a
+                # capped store is as visible in the run's totals as an unreadable one.
+                # An examiner needs to know this store is incompletely represented, not
+                # infer it from a suspiciously round record count.
+                unparsed.source(
+                    storage_directory,
+                    f'truncated at {store_records} records (per-store cap); '
+                    f'the remaining records in this store were not read')
 
         # Again, the driver logs the total; this says how many databases it came from,
         # and only mentions the directory listing when it held entries that were not
