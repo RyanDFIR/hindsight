@@ -3209,6 +3209,7 @@ class AnalysisSession(object):
                     return str(value)
                 return value
 
+            unhandled_timeline = collections.Counter()
             for item in self.parsed_artifacts:
                 if item.row_type.startswith('url'):
                     c.execute(
@@ -3301,12 +3302,24 @@ class AnalysisSession(object):
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
-                elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session', 'permission action', 'profile creation')):
+                elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session',
+                                               'permission action', 'profile creation', 'extension')):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
+
+                else:
+                    # Previously fell through with no branch and no message, the way every
+                    # Service Worker row used to go missing from the storage table. The
+                    # else matters more than any one branch: it is what makes the next
+                    # unhandled row_type a reported number rather than a silent absence.
+                    unhandled_timeline[item.row_type] += 1
+
+            for row_type, count in unhandled_timeline.most_common():
+                log.error(f'{count} "{row_type}" record(s) are MISSING from the SQLite '
+                          f'timeline table; no INSERT branch handles that row_type')
 
             unhandled_storage = collections.Counter()
             for item in self.parsed_storage:
