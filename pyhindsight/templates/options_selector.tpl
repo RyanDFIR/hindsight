@@ -7,6 +7,17 @@
             <td><input name="log_path" type="text" value="hindsight.log"  size=30 /></td>
         </tr>
         <tr>
+            <td>Log Level:</td>
+            <td>
+                <select name="log_level">
+                    <option value="debug">Debug (adds per-record detail)</option>
+                    <option value="info" selected>Info (default)</option>
+                    <option value="warning">Warning</option>
+                    <option value="error">Error</option>
+                </select>
+            </td>
+        </tr>
+        <tr>
             <td>Timezone:</td>
             <td>
                 <select name="timezone">
