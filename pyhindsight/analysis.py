@@ -1193,6 +1193,68 @@ class AnalysisSession(object):
         else:
             self.display_version = "None"
 
+    # Collections every browser produces, folded by name. Chrome adds
+    # parsed_extension_data and parsed_sync_data; Firefox has neither, and a browser
+    # that grows one later needs no edit here.
+    BROWSER_COLLECTIONS = (
+        'parsed_artifacts',
+        'parsed_storage',
+        'parsed_extension_data',
+        'parsed_sync_data',
+        'version',
+        'preferences',
+    )
+
+    def absorb_browser_analysis(self, profile_path, browser_analysis):
+        """Fold one finished browser analysis into this session.
+
+        The Chrome and Firefox branches of run() carried near-verbatim copies of
+        this, and the copies drifted: session_structure promotion existed only in
+        the Chrome branch, so when Firefox started producing one it rendered
+        nothing until the same seven lines were pasted across.
+
+        Everything optional is folded by attribute name rather than by branching on
+        the browser, so the difference between browsers stays in what they produce
+        instead of being restated here.
+
+        installed_extensions is deliberately *not* folded in. It is the one thing in
+        the two branches that is a genuine difference rather than duplication, and
+        moving it here is not behaviour-preserving: Firefox does produce an
+        installed_extensions block, it is simply never promoted, and promoting it
+        emits it through the Chrome shape -- a Firefox profile's add-ons appear as
+        "Chrome Extensions" with data_type chrome:extension:installed. Whether
+        Firefox extensions should reach the report, and under what labels, is a
+        separate question from removing this duplication.
+        """
+        for name in self.BROWSER_COLLECTIONS:
+            values = getattr(browser_analysis, name, None)
+            if values:
+                getattr(self, name).extend(values)
+
+        self.record_profile_results(profile_path, browser_analysis)
+        self.display_version = browser_analysis.display_version
+
+        # hasattr, not a truthiness test: this is the promotion that had gone missing
+        # from the Firefox branch, and an empty-but-present structure should still be
+        # recorded for the profile it belongs to.
+        if hasattr(browser_analysis, 'session_structure'):
+            if not hasattr(self, 'session_structures'):
+                self.session_structures = []
+            self.session_structures.append({
+                'profile': profile_path,
+                **browser_analysis.session_structure
+            })
+
+        for item, value in browser_analysis.__dict__.items():
+            if isinstance(value, dict):
+                try:
+                    # A {'presentation': ..., 'data': ...} attribute is a renderable
+                    # block; promote it so the session carries it into the report.
+                    if value.get('presentation') and value.get('data'):
+                        self.promote_object_to_analysis_session(item, value)
+                except Exception as e:
+                    log.info(f'Exception occurred while analyzing {item} for analysis session promotion: {e}')
+
     def run(self):
         if self.selected_output_format is None:
             self.selected_output_format = self.available_output_formats[-1]
@@ -1282,41 +1344,18 @@ class AnalysisSession(object):
                                           originator_guids=self.originator_guids,
                                           artifact_filter=self.artifact_filter)
                 browser_analysis.process(api_keys=self.api_keys)
-                self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
-                self.parsed_storage.extend(browser_analysis.parsed_storage)
-                self.parsed_extension_data.extend(browser_analysis.parsed_extension_data)
-                self.parsed_sync_data.extend(browser_analysis.parsed_sync_data)
-                self.record_profile_results(found_profile_path, browser_analysis)
-                self.version.extend(browser_analysis.version)
-                self.display_version = browser_analysis.display_version
-                self.preferences.extend(browser_analysis.preferences)
-                if hasattr(browser_analysis, 'session_structure'):
-                    if not hasattr(self, 'session_structures'):
-                        self.session_structures = []
-                    self.session_structures.append({
-                        'profile': found_profile_path,
-                        **browser_analysis.session_structure
-                    })
+                self.absorb_browser_analysis(found_profile_path, browser_analysis)
 
-                # installed_extensions no longer carries a 'presentation' (it is rendered by
-                # the dedicated nested Extensions worksheet), so promote it explicitly here
-                # rather than via promote_object_to_analysis_session().
+                # Chrome-only, and outside the helper on purpose: installed_extensions
+                # carries no 'presentation' (the nested Extensions worksheet renders
+                # it), and Firefox's equivalent would come through this Chrome shape.
+                # See absorb_browser_analysis.
                 browser_extensions = getattr(browser_analysis, 'installed_extensions', None)
                 if browser_extensions and browser_extensions.get('data'):
                     if not getattr(self, 'installed_extensions', None):
                         self.installed_extensions = {'data': []}
                     self.installed_extensions.setdefault('data', [])
                     self.installed_extensions['data'].extend(browser_extensions['data'])
-
-                for item in browser_analysis.__dict__:
-                    if isinstance(browser_analysis.__dict__[item], dict):
-                        try:
-                            # If the browser_analysis attribute has 'presentation' and 'data' subkeys, promote from
-                            if browser_analysis.__dict__[item].get('presentation') and \
-                                    browser_analysis.__dict__[item].get('data'):
-                                self.promote_object_to_analysis_session(item, browser_analysis.__dict__[item])
-                        except Exception as e:
-                            log.info(f'Exception occurred while analyzing {item} for analysis session promotion: {e}')
 
             elif pipeline == "firefox":
                 browser_analysis = Firefox(found_profile_path, browser_name=profile_browser_type,
@@ -1325,28 +1364,7 @@ class AnalysisSession(object):
                                            no_copy=self.no_copy, temp_dir=self.temp_dir,
                                            artifact_filter=self.artifact_filter)
                 browser_analysis.process()
-                self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
-                self.parsed_storage.extend(browser_analysis.parsed_storage)
-                self.record_profile_results(found_profile_path, browser_analysis)
-                self.version.extend(browser_analysis.version)
-                self.display_version = browser_analysis.display_version
-                self.preferences.extend(browser_analysis.preferences)
-                if hasattr(browser_analysis, 'session_structure'):
-                    if not hasattr(self, 'session_structures'):
-                        self.session_structures = []
-                    self.session_structures.append({
-                        'profile': found_profile_path,
-                        **browser_analysis.session_structure
-                    })
-
-                for item in browser_analysis.__dict__:
-                    if isinstance(browser_analysis.__dict__[item], dict):
-                        try:
-                            if browser_analysis.__dict__[item].get('presentation') and \
-                                    browser_analysis.__dict__[item].get('data'):
-                                self.promote_object_to_analysis_session(item, browser_analysis.__dict__[item])
-                        except Exception as e:
-                            log.info(f'Exception occurred while analyzing {item} for analysis session promotion: {e}')
+                self.absorb_browser_analysis(found_profile_path, browser_analysis)
 
         self.apply_originator_visit_sources()
         self.generate_display_version()
