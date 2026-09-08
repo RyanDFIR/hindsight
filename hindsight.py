@@ -21,6 +21,7 @@ import pyhindsight
 import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
 from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
+from pyhindsight.logging_setup import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging
 from pyhindsight.utils import get_rich_banner, make_stdout_resilient
 
 import rich.align
@@ -85,6 +86,12 @@ The Chrome Profile folder default locations are:
                         default=analysis_session.available_output_formats[-1], help='Output format')
     parser.add_argument('-l', '--log', help='Location Hindsight should log to (will append if exists)',
                         default=os.path.join(get_base_dir(), 'hindsight.log'))
+    parser.add_argument('--log-level', '--log_level', choices=list(LOG_LEVELS), default=DEFAULT_LOG_LEVEL,
+                        help='How much detail to write to the log. "info" (the default) keeps the '
+                             'per-artifact counts, the skip and failure lines and the "Not Parsed items" '
+                             'summary; "debug" adds the per-record detail those totals are made of, and '
+                             "the directory listings and options dump. Only Hindsight's own loggers "
+                             "are set; dependencies stay at warning either way.")
     parser.add_argument('-t', '--timezone', help='Display timezone for the timestamps in XLSX output', default='UTC')
     parser.add_argument('-d', '--decrypt', choices=['mac', 'linux'], default=None,
                         help='Try to decrypt Chrome data from a Linux or Mac system; support for both is currently '
@@ -227,12 +234,9 @@ def main():
     analysis_session.temp_dir = args.temp_dir
     analysis_session.log_path = args.log
 
-    # Set up logging. encoding is explicit because the default is the platform's, cp1252
-    # on Windows, which silently mangles anything outside it. logging swallows handler
-    # errors, so this never raised; it just lost characters from the record of the run.
-    logging.basicConfig(filename=analysis_session.log_path, level=logging.DEBUG,
-                        format='%(asctime)s.%(msecs).03d | %(levelname).01s | %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S', encoding='utf-8')
+    # Set up logging. See pyhindsight.logging_setup for why the root logger is left
+    # at WARNING and only Hindsight's own loggers carry the requested level.
+    configure_logging(analysis_session.log_path, args.log_level, extra_loggers=(__name__,))
     log = logging.getLogger(__name__)
 
     # Hindsight version info

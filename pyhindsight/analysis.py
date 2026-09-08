@@ -902,9 +902,10 @@ class AnalysisSession(object):
                     log.info(f'   - {label}: not parsed; {reason}')
                 elif result.is_partial:
                     log.info(f'   - {label}: parsed {result.count}, '
-                             f'{result.describe_unparsed()}; each one is logged above '
-                             f'as "Unparsed source in {result.key}" / '
-                             f'"Unparsed record in {result.key}"')
+                             f'{result.describe_unparsed()}; each unparsed source is '
+                             f'logged above as "Unparsed source in {result.key}", and '
+                             f'each unparsed record as "Unparsed record in {result.key}" '
+                             f'at the debug level (--log-level debug)')
         if anything:
             sources, records, artifacts = self.unparsed_totals()
             if sources or records:
