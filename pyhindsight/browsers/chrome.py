@@ -3098,6 +3098,47 @@ class Chrome(WebBrowser):
         self.preferences.append({'data': results, 'presentation': presentation})
         return preference_count
 
+    @staticmethod
+    def decode_notification_id(notification_id):
+        """Split a Chromium notification_id into the facts it encodes.
+
+        The id is a packed string, not an opaque handle:
+
+            p#https://calendar.google.com/#1event-notification
+            ||                            |
+            ||                            +- type digit: 0 = notification id,
+            ||                                           1 = developer tag
+            |+- b if the browser raised it, # if the page did
+            +- p persistent, n non-persistent
+
+        Returns None for anything that does not match, so a format change
+        degrades to "we do not know" rather than to a wrong answer; the caller
+        emits the raw id in that case and nothing is lost.
+        """
+        if not notification_id or len(notification_id) < 3:
+            return None
+
+        persistent = {'p': True, 'n': False}.get(notification_id[0])
+        raised_by = {'b': 'browser', '#': 'page'}.get(notification_id[1])
+        if persistent is None or raised_by is None:
+            return None
+
+        origin, separator, tail = notification_id[2:].partition('#')
+        if not separator or not tail:
+            return None
+
+        kind = {'0': 'notification id', '1': 'developer tag'}.get(tail[0])
+        if kind is None:
+            return None
+
+        return {
+            'persistent': persistent,
+            'raised_by': raised_by,
+            'origin': origin,
+            'kind': kind,
+            'value': tail[1:],
+        }
+
     def get_platform_notifications(self, path, dir_name):
         try:
             from ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
@@ -3148,6 +3189,28 @@ class Chrome(WebBrowser):
                                 value_parts.append(f'Actions: {actions_str}')
                         if notification.data is not None:
                             value_parts.append(f'Data: {notification.data}')
+
+                        # The developer tag is the slot a site overwrites, so it is what
+                        # separates six reminders from one recurring channel from six
+                        # unrelated alerts. ccl parses it already; it was never emitted.
+                        if notification.tag:
+                            value_parts.append(f'Tag: {notification.tag}')
+
+                        decoded = Chrome.decode_notification_id(notification.notification_id)
+                        if decoded:
+                            value_parts.append(
+                                'Persistent: ' + ('Yes' if decoded['persistent'] else 'No'))
+                            value_parts.append(f"Raised By: {decoded['raised_by'].title()}")
+                            # Only when it says something the Tag row does not.
+                            if decoded['kind'] == 'notification id' and decoded['value']:
+                                value_parts.append(f"Notification ID: {decoded['value']}")
+                        elif notification.notification_id:
+                            # Undecodable: emit it whole rather than drop it.
+                            value_parts.append(f'Notification ID: {notification.notification_id}')
+
+                        if notification.persistent_notification_id:
+                            value_parts.append(
+                                f'Persistent Notification ID: {notification.persistent_notification_id}')
 
                         value = '\n'.join(value_parts)
 
