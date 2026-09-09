@@ -6,10 +6,18 @@ import logging
 import warnings
 import bottle
 import importlib
-import pyhindsight
-import pyhindsight.plugins
-from pyhindsight.analysis import AnalysisSession
-from pyhindsight.utils import get_rich_banner, make_stdout_resilient
+# See the note in hindsight.py: ccl_chromium_reader cannot be a declared
+# dependency, so a pip install can be missing it (#331).
+try:
+    import pyhindsight
+    import pyhindsight.plugins
+    from pyhindsight.analysis import AnalysisSession
+    from pyhindsight.utils import get_rich_banner, make_stdout_resilient
+except ImportError as missing:
+    if "ccl_chromium_reader" not in str(missing):
+        raise
+    print(f"\n{missing}\n", file=sys.stderr)
+    sys.exit(1)
 import rich.align
 import rich.console
 

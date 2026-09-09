@@ -15,7 +15,26 @@ import logging
 import shutil
 import puremagic
 import base64
-import ccl_chromium_reader
+
+try:
+    import ccl_chromium_reader
+except ImportError as _ccl_import_error:  # pragma: no cover - install-shape dependent
+    # ccl_chromium_reader exists only as a git repo, and PyPI rejects metadata
+    # carrying direct-URL dependencies, so it cannot be listed in
+    # pyproject.toml's `dependencies` (see the comment there). A plain
+    # `pip install pyhindsight` therefore produces a package whose first use
+    # is a bare ModuleNotFoundError with no hint at the fix -- see #331.
+    #
+    # This does not fix the distribution problem. It replaces the traceback
+    # with the command that resolves it.
+    raise ImportError(
+        "Hindsight needs ccl_chromium_reader, which is not on PyPI and so cannot "
+        "be installed automatically. Install it with:\n\n"
+        "    pip install git+https://github.com/cclgroupltd/ccl_chromium_reader.git\n\n"
+        "Without it, cache, IndexedDB, Session Storage and Local Storage cannot be "
+        "parsed. The frozen release binaries already bundle it; only pip installs "
+        "need this step."
+    ) from _ccl_import_error
 
 from pyhindsight.browsers.webbrowser import (
     ParseFailures, WebBrowser, timeline_sort_key)

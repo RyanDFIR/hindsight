@@ -17,11 +17,22 @@ import shutil
 import sys
 import time
 
-import pyhindsight
-import pyhindsight.plugins
-from pyhindsight.analysis import AnalysisSession
-from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
-from pyhindsight.utils import get_rich_banner, make_stdout_resilient
+# ccl_chromium_reader cannot be a declared dependency (PyPI rejects direct-URL
+# metadata), so a pip install can be missing it. chrome.py raises an ImportError
+# naming the install command; catching it here turns that into one line on
+# stderr instead of a traceback the user has to read past. See #331.
+try:
+    import pyhindsight
+    import pyhindsight.plugins
+    from pyhindsight.analysis import AnalysisSession
+    from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
+    from pyhindsight.utils import get_rich_banner, make_stdout_resilient
+except ImportError as missing:
+    if "ccl_chromium_reader" not in str(missing):
+        raise
+    print(f"\n{missing}\n", file=sys.stderr)
+    sys.exit(1)
+
 
 import rich.align
 import rich.console
