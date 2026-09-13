@@ -96,6 +96,9 @@ class ParseFailures:
         self.artifact_label = artifact_label
         self.sources = []
         self.records = []
+        # Batches reported through record_batch(), and the records they stand for.
+        self.record_batches = []
+        self._batched_record_count = 0
         self._seen = set()
 
     def _note(self, bucket, name, reason):
@@ -120,9 +123,22 @@ class ParseFailures:
         if self._note(self.records, name, reason):
             log.debug(f' - Unparsed record in {self.artifact_label}: {name} ({reason})')
 
+    def record_batch(self, name, reason, count):
+        """Record `count` items from one source that were read but not kept.
+
+        For losses too numerous to itemize, such as everything past a per-store cap.
+        Logged once, at warning, with the count stated in `reason`, rather than once
+        per item; the count still adds to the unparsed records, so the run's totals
+        include it.
+        """
+        if count > 0 and self._note(self.record_batches, name, reason):
+            self._batched_record_count += count
+            log.warning(f' - Unparsed records in {self.artifact_label}: {name} ({reason})')
+
     def result(self, count):
         """Package `count` with what was lost, for the parser to return."""
-        return ParseResult(count, len(self.sources), len(self.records))
+        return ParseResult(count, len(self.sources),
+                           len(self.records) + self._batched_record_count)
 
 
 

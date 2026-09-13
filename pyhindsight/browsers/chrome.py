@@ -58,6 +58,16 @@ SECONDARY_CACHE_DIRS = [
 # what would make the output quietly wrong.
 SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 
+# Most records kept from one IndexedDB store directory. The limit exists for the XLSX
+# output: a worksheet holds at most 1,048,576 rows, xlsxwriter silently discards writes
+# past that, and every IndexedDB record lands on the one Storage sheet. This replaces a
+# skip hard-coded to one extension's store, which covered exactly that store and nothing
+# else. A store over the cap keeps its first records; the rest are still read, so they
+# can be counted, and reported as unparsed records rather than silently missing. It is
+# per store, so it keeps any one store well clear of the sheet limit but does not bound
+# the sheet's total.
+INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
+
 
 class Chrome(WebBrowser):
     def __init__(self, profile_path, browser_name=None, cache_path=None, version=None, timezone=None,
@@ -85,6 +95,10 @@ class Chrome(WebBrowser):
         self.hsts_hashes = {}
         self.kg_entities = {}
         self.originator_guids = originator_guids
+        # Per-store IndexedDB record cap. An instance attribute rather than a bare
+        # module read, so a caller with a known-good corpus can raise it (or set it to
+        # None to disable the cap) without patching the module.
+        self.indexeddb_max_records_per_store = INDEXEDDB_MAX_RECORDS_PER_STORE
 
         if self.originator_guids is None:
             self.originator_guids = {}
@@ -2046,19 +2060,17 @@ class Chrome(WebBrowser):
                 continue
             leveldb_dirs_read += 1
 
-            # The Ghostery extension has 1M+ records in it; skip for now. Recorded
-            # as an unparsed source rather than skipped silently -- an examiner needs to
-            # know this origin was never read, not infer it from its absence.
-            if storage_directory == 'chrome-extension_mlomiejdfkolichcflejclcbmpeaniij_0.indexeddb.leveldb':
-                unparsed.source(storage_directory,
-                              'skipped by hard-coded rule (very large store)')
-                continue
-
             origin = storage_directory.split('.indexeddb')[0]
             blob_directory = None
             blob_path = os.path.join(idb_path, f'{origin}.indexeddb.blob')
             if os.path.exists(blob_path):
                 blob_directory = blob_path
+
+            # Budget for this store directory, not for the run: one huge store must not
+            # eat the allowance of the ones after it.
+            store_budget = self.indexeddb_max_records_per_store
+            store_records = 0
+            store_records_over_cap = 0
 
             origin_idb = None
             try:
@@ -2071,6 +2083,14 @@ class Chrome(WebBrowser):
                         obj_store = database.get_object_store_by_name(obj_store_name)
                         try:
                             for record in obj_store.iterate_records():
+                                # Past the cap a record is counted, not kept. Reading on to
+                                # the end of the store is what lets the report say exactly
+                                # how many were left out.
+                                if store_budget is not None and store_records >= store_budget:
+                                    store_records_over_cap += 1
+                                    continue
+                                store_records += 1
+
                                 record_state = 'Deleted'
                                 if record.is_live:
                                     record_state = 'Live'
@@ -2125,6 +2145,17 @@ class Chrome(WebBrowser):
             finally:
                 if origin_idb is not None:
                     origin_idb.close()
+
+            if store_records_over_cap:
+                # Unparsed records, not an unparsed source: the store was read to the end,
+                # so how much is missing is known, and the count shows up in the run's
+                # totals and the Unparsed column instead of being inferred from a
+                # suspiciously round record count.
+                unparsed.record_batch(
+                    storage_directory,
+                    f'{store_records_over_cap} records past the per-store cap of '
+                    f'{store_budget} were not kept',
+                    store_records_over_cap)
 
         # Again, the driver logs the total; this says how many databases it came from,
         # and only mentions the directory listing when it held entries that were not
