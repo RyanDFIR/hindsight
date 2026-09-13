@@ -1281,7 +1281,13 @@ class AnalysisSession(object):
                                           no_copy=self.no_copy, temp_dir=self.temp_dir,
                                           originator_guids=self.originator_guids,
                                           artifact_filter=self.artifact_filter)
-                browser_analysis.process(api_keys=self.api_keys)
+                # Both pipelines copy databases into the same per-run directory, so the
+                # teardown lives here, not in either browser's process(), and runs even
+                # if parsing raises.
+                try:
+                    browser_analysis.process(api_keys=self.api_keys)
+                finally:
+                    browser_analysis.remove_temp_dir()
                 self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.parsed_extension_data.extend(browser_analysis.parsed_extension_data)
@@ -1324,7 +1330,10 @@ class AnalysisSession(object):
                                            timezone=self.timezone,
                                            no_copy=self.no_copy, temp_dir=self.temp_dir,
                                            artifact_filter=self.artifact_filter)
-                browser_analysis.process()
+                try:
+                    browser_analysis.process()
+                finally:
+                    browser_analysis.remove_temp_dir()
                 self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.record_profile_results(found_profile_path, browser_analysis)

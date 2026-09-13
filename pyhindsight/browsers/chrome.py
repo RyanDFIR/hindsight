@@ -12,7 +12,6 @@ import datetime
 import re
 import json
 import logging
-import shutil
 import puremagic
 import base64
 import ccl_chromium_reader
@@ -5318,17 +5317,6 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
         self.parsed_storage.sort()
-
-        # Clean temp directory after processing profile
-        if not self.no_copy:
-            # The directory is only created when a database is actually copied into it,
-            # so its absence is normal rather than an error worth reporting.
-            if os.path.isdir(self.temp_dir):
-                log.info(f'Deleting temporary directory {self.temp_dir}')
-                try:
-                    shutil.rmtree(self.temp_dir)
-                except Exception as e:
-                    log.error(f'Exception deleting temporary directory: {e}')
 
     class URLItem(WebBrowser.URLItem):
         def decode_transition(self):

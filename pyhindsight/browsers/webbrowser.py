@@ -3,6 +3,8 @@ import dataclasses
 import datetime
 import hashlib
 import logging
+import os
+import shutil
 import sqlite3
 import sys
 import typing
@@ -510,6 +512,22 @@ class WebBrowser(object):
 
         if self.version is None:
             self.version = []
+
+    def remove_temp_dir(self):
+        """Delete the directory this profile's databases were copied into.
+
+        Copies are made only when `no_copy` is off, and the directory only exists once a
+        database has actually been copied, so its absence is normal. Called once per
+        profile by the analysis session, whichever browser parsed it.
+        """
+        if self.no_copy or not self.temp_dir:
+            return
+        if os.path.isdir(self.temp_dir):
+            log.info(f'Deleting temporary directory {self.temp_dir}')
+            try:
+                shutil.rmtree(self.temp_dir)
+            except Exception as e:
+                log.error(f'Exception deleting temporary directory: {e}')
 
     def describe_open_failure(self, default='could not be opened'):
         """Why the last database open failed, for a parser to attach to an unparsed source.
