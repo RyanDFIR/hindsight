@@ -1224,7 +1224,9 @@ class AnalysisSession(object):
         if loggable_options.get('api_keys'):
             loggable_options['api_keys'] = {
                 key_name: '<redacted>' for key_name in loggable_options['api_keys']}
-        log.debug("Options: " + str(loggable_options))
+        # INFO rather than DEBUG: this is the run's own record of what it was asked to
+        # do, so it belongs in a default-level log.
+        log.info("Options: " + str(loggable_options))
 
         # Normalize the optional -b/--browser_type override. When set, it forces a
         # single family for every discovered profile (case-insensitive); when unset,
@@ -1252,7 +1254,7 @@ class AnalysisSession(object):
             log.error(fail_message)
             self.fatal_error = fail_message
             return False
-        log.debug("Input directory contents: " + str(input_listing))
+        log.info("Input directory contents: " + str(input_listing))
 
         # Search input directory for browser profiles to analyze
         input_profiles = self.find_browser_profiles(self.input_path)

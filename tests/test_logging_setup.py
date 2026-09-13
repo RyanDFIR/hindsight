@@ -5,9 +5,9 @@ which is the *root* logger: every run wrote a full debug trace, there was no way
 to ask for less, and every dependency was turned up to debug along with us.
 """
 
-import io
 import logging
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -44,6 +44,8 @@ class _FreshLogging:
         root.setLevel(self._root_level)
         for name, level in self._levels.items():
             logging.getLogger(name).setLevel(level)
+        # The handlers above are closed first, so the log file is no longer held open.
+        shutil.rmtree(self.dir, ignore_errors=True)
         return False
 
     def emit_one_of_each(self):
@@ -58,7 +60,8 @@ class _FreshLogging:
             handler.flush()
 
     def read(self):
-        return io.open(self.path, encoding='utf-8').read()
+        with open(self.path, encoding='utf-8') as f:
+            return f.read()
 
 
 class TestNormalizeLogLevel(unittest.TestCase):

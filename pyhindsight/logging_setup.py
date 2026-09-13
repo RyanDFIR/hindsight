@@ -16,8 +16,9 @@ LOG_LEVELS = {
     'error': logging.ERROR,
 }
 
-# INFO keeps the per-artifact counts, the skip and failure lines and the
-# "Not Parsed items" summary, and drops the directory listings and options dump.
+# INFO keeps the run's options and input listing, the per-artifact counts, the skip
+# and failure lines and the "Not Parsed items" summary, and drops the per-directory
+# file listings and the per-record detail.
 DEFAULT_LOG_LEVEL = 'info'
 
 LOG_FORMAT = '%(asctime)s.%(msecs).03d | %(levelname).01s | %(message)s'

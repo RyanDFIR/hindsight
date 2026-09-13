@@ -75,6 +75,18 @@ class TestCommandLineRuns(unittest.TestCase):
             self.assertTrue(types, 'no records written')
             self.assertTrue(all('history' in t for t in types), types)
 
+    def test_the_default_log_keeps_the_run_record_and_drops_debug(self):
+        # The options and the input listing are the run's own record of what it was
+        # asked to do, so they have to survive the default log level.
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_hindsight('-f', 'jsonl', output_dir=tmp)
+            self.assertEqual(0, result.returncode, result.stderr)
+            with open(os.path.join(tmp, 'hindsight.log'), encoding='utf-8') as f:
+                body = f.read()
+        self.assertIn('| I | Options: ', body)
+        self.assertIn('| I | Input directory contents: ', body)
+        self.assertNotIn('| D | ', body)
+
     def test_list_artifacts_needs_no_input_and_exits_cleanly(self):
         result = subprocess.run(
             [sys.executable, 'hindsight.py', '--list-artifacts'],

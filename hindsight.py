@@ -88,10 +88,11 @@ The Chrome Profile folder default locations are:
                         default=os.path.join(get_base_dir(), 'hindsight.log'))
     parser.add_argument('--log-level', '--log_level', choices=list(LOG_LEVELS), default=DEFAULT_LOG_LEVEL,
                         help='How much detail to write to the log. "info" (the default) keeps the '
-                             'per-artifact counts, the skip and failure lines and the "Not Parsed items" '
-                             'summary; "debug" adds the per-record detail those totals are made of, and '
-                             "the directory listings and options dump. Only Hindsight's own loggers "
-                             "are set; dependencies stay at warning either way.")
+                             "run's options and input listing, the per-artifact counts, the skip and "
+                             'failure lines and the "Not Parsed items" summary; "debug" adds the '
+                             'per-record detail those totals are made of and the per-directory file '
+                             "listings. Only Hindsight's own loggers are set; dependencies stay at "
+                             "warning either way.")
     parser.add_argument('-t', '--timezone', help='Display timezone for the timestamps in XLSX output', default='UTC')
     parser.add_argument('-d', '--decrypt', choices=['mac', 'linux'], default=None,
                         help='Try to decrypt Chrome data from a Linux or Mac system; support for both is currently '
