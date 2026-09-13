@@ -58,13 +58,15 @@ SECONDARY_CACHE_DIRS = [
 # what would make the output quietly wrong.
 SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 
-# Most records read from one IndexedDB store directory before the rest are left
-# unread. This replaces a skip hard-coded to one extension's store, which protected
-# against exactly that one known-large store and nothing else. The cap is measured
-# rather than named, so any large store is covered, and it truncates rather than
-# skipping: a capped store yields its first records plus a note through
-# `unparsed.source`, where the hard-coded rule yielded nothing at all.
-INDEXEDDB_MAX_RECORDS_PER_STORE = 100_000
+# Most records kept from one IndexedDB store directory. The limit exists for the XLSX
+# output: a worksheet holds at most 1,048,576 rows, xlsxwriter silently discards writes
+# past that, and every IndexedDB record lands on the one Storage sheet. This replaces a
+# skip hard-coded to one extension's store, which covered exactly that store and nothing
+# else. A store over the cap keeps its first records; the rest are still read, so they
+# can be counted, and reported as unparsed records rather than silently missing. It is
+# per store, so it keeps any one store well clear of the sheet limit but does not bound
+# the sheet's total.
+INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
 
 
 class Chrome(WebBrowser):
@@ -2068,7 +2070,7 @@ class Chrome(WebBrowser):
             # eat the allowance of the ones after it.
             store_budget = self.indexeddb_max_records_per_store
             store_records = 0
-            truncated = False
+            store_records_over_cap = 0
 
             origin_idb = None
             try:
@@ -2076,22 +2078,17 @@ class Chrome(WebBrowser):
                     leveldb_dir=os.path.join(idb_path, f'{origin}.indexeddb.leveldb'), leveldb_blob_dir=blob_directory)
 
                 for database_id in origin_idb.database_ids:
-                    if truncated:
-                        break
                     database = origin_idb[database_id.dbid_no]
                     for obj_store_name in database.object_store_names:
-                        if truncated:
-                            break
                         obj_store = database.get_object_store_by_name(obj_store_name)
                         try:
                             for record in obj_store.iterate_records():
-                                # Checked before the record is built, so the cap bounds
-                                # the work done and not merely the rows kept: iterating a
-                                # million-record store is the hang, and resolving each
-                                # record's blob refs is the memory.
+                                # Past the cap a record is counted, not kept. Reading on to
+                                # the end of the store is what lets the report say exactly
+                                # how many were left out.
                                 if store_budget is not None and store_records >= store_budget:
-                                    truncated = True
-                                    break
+                                    store_records_over_cap += 1
+                                    continue
                                 store_records += 1
 
                                 record_state = 'Deleted'
@@ -2149,15 +2146,16 @@ class Chrome(WebBrowser):
                 if origin_idb is not None:
                     origin_idb.close()
 
-            if truncated:
-                # Reported through the same channel the hard-coded skip used, so a
-                # capped store is as visible in the run's totals as an unreadable one.
-                # An examiner needs to know this store is incompletely represented, not
-                # infer it from a suspiciously round record count.
-                unparsed.source(
+            if store_records_over_cap:
+                # Unparsed records, not an unparsed source: the store was read to the end,
+                # so how much is missing is known, and the count shows up in the run's
+                # totals and the Unparsed column instead of being inferred from a
+                # suspiciously round record count.
+                unparsed.record_batch(
                     storage_directory,
-                    f'truncated at {store_records} records (per-store cap); '
-                    f'the remaining records in this store were not read')
+                    f'{store_records_over_cap} records past the per-store cap of '
+                    f'{store_budget} were not kept',
+                    store_records_over_cap)
 
         # Again, the driver logs the total; this says how many databases it came from,
         # and only mentions the directory listing when it held entries that were not

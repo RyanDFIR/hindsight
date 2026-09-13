@@ -75,12 +75,12 @@ class _WrappedIndexDB:
 
 
 class TestIndexedDBRecordCap(unittest.TestCase):
-    """A large store must be capped by measurement, not by name.
+    """A large store is capped by measurement, not by name.
 
     The previous protection was a skip keyed to one extension's literal directory
-    name, so every other large store still parsed fully. The cap now truncates any
-    store, and reports the truncation through `unparsed.source` the way the
-    hard-coded skip reported its skip.
+    name, so every other large store still parsed fully. The cap applies to any store:
+    it keeps the first records, counts the rest, and reports that count as unparsed
+    records so the loss shows up in the run's totals.
     """
 
     def _run(self, record_count, cap):
@@ -107,40 +107,43 @@ class TestIndexedDBRecordCap(unittest.TestCase):
 
         self.assertEqual(10, len(parsed))
         self.assertEqual(0, result.unparsed_sources)
+        self.assertEqual(0, result.unparsed_records)
 
-    def test_a_store_over_the_cap_is_truncated_not_skipped(self):
+    def test_a_store_over_the_cap_keeps_its_first_records(self):
         # The hard-coded rule yielded nothing at all for the one store it named. A
         # capped store yields its first `cap` records, which is strictly more.
         result, store, parsed, _ = self._run(record_count=500, cap=100)
 
         self.assertEqual(100, len(parsed))
-        self.assertEqual(1, result.unparsed_sources)
+        self.assertEqual(list(range(100)), [item.seq for item in parsed])
 
-    def test_the_cap_bounds_the_iteration_and_not_only_the_rows_kept(self):
-        # Iterating a million-record store is the hang the cap exists to prevent, so
-        # it has to stop pulling records, not just stop appending them.
+    def test_records_past_the_cap_are_counted_as_unparsed_records(self):
+        # The store is read to the end, so the loss is a known number of records, not
+        # an unparsed source of unknown size.
         result, store, parsed, _ = self._run(record_count=5000, cap=50)
 
-        self.assertLessEqual(store.iterated, 51)
+        self.assertEqual(5000, store.iterated)
+        self.assertEqual(4950, result.unparsed_records)
+        self.assertEqual(0, result.unparsed_sources)
 
-    def test_the_truncation_names_the_store_and_how_far_it_got(self):
-        # `unparsed.source` logs each failure as it happens, which is what an examiner
-        # reads to learn the store is incompletely represented rather than inferring it
-        # from a suspiciously round record count.
+    def test_the_truncation_is_logged_once_with_the_store_and_the_count(self):
+        # One warning line for the whole overflow, rather than one debug line per
+        # record, which is what an examiner reads to learn the store is incomplete.
         with _WarningCapture() as captured:
             result, store, parsed, store_dir_name = self._run(record_count=200, cap=25)
 
         self.assertEqual(25, len(parsed))
-        self.assertEqual(1, result.unparsed_sources)
         matching = [m for m in captured.messages if store_dir_name in m]
-        self.assertTrue(matching, captured.messages)
-        self.assertIn('truncated at 25 records', matching[0])
+        self.assertEqual(1, len(matching), captured.messages)
+        self.assertIn('Unparsed records in IndexedDB', matching[0])
+        self.assertIn('175 records past the per-store cap of 25', matching[0])
 
     def test_a_none_cap_disables_truncation(self):
         result, store, parsed, _ = self._run(record_count=300, cap=None)
 
         self.assertEqual(300, len(parsed))
         self.assertEqual(0, result.unparsed_sources)
+        self.assertEqual(0, result.unparsed_records)
 
 
 if __name__ == '__main__':
