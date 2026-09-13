@@ -3158,6 +3158,43 @@ class AnalysisSession(object):
                 'seq INT, state INT, state_friendly TEXT, file_exists BOOL, file_size INT, '
                 'magic_results TEXT, file_sha256 TEXT)')
 
+            # Service Worker records get their own table, as they get their own XLSX sheet.
+            # In `storage` their registration, resource, script and cache fields could only
+            # be packed into `value`. After the columns every table shares, each column is
+            # named for an item attribute, which is also the record's JSONL key, so a SQL
+            # query and a JSONL filter use the same field names. One row per item; a column
+            # that does not apply to a record's type is NULL.
+            service_worker_columns = (
+                ('scope_url', 'TEXT'), ('script_url', 'TEXT'), ('url', 'TEXT'),
+                ('request_url', 'TEXT'), ('final_url', 'TEXT'), ('storage_key', 'TEXT'),
+                ('origin_hash', 'TEXT'), ('registration_id', 'INT'), ('version_id', 'INT'),
+                ('resource_id', 'INT'), ('resource_state', 'TEXT'), ('is_active', 'BOOL'),
+                ('has_fetch_handler', 'BOOL'), ('script_type', 'TEXT'), ('update_via_cache', 'TEXT'),
+                ('navigation_preload_enabled', 'BOOL'), ('navigation_preload_header', 'TEXT'),
+                ('resources_total_size_bytes', 'INT'), ('http_status', 'TEXT'), ('content_type', 'TEXT'),
+                ('request_method', 'TEXT'), ('response_status', 'INT'), ('response_status_text', 'TEXT'),
+                ('response_type', 'TEXT'), ('response_mime_type', 'TEXT'), ('size_bytes', 'INT'),
+                ('sha256_checksum', 'TEXT'), ('body_size', 'INT'), ('body_sha256', 'TEXT'),
+                ('body_sha256_match', 'BOOL'), ('cache_name', 'TEXT'), ('cache_uuid', 'TEXT'),
+                ('user_data_key', 'TEXT'), ('subsystem', 'TEXT'), ('raw_value_size', 'INT'),
+                ('script_response_time', 'TEXT'), ('response_time', 'TEXT'), ('request_time', 'TEXT'),
+                ('entry_time', 'TEXT'), ('event_time', 'TEXT'), ('source_file', 'TEXT'),
+            )
+            service_worker_time_columns = {
+                'script_response_time', 'response_time', 'request_time', 'entry_time', 'event_time'}
+            service_worker_shared_columns = (
+                'type, origin, key, value, modification_time, interpretation, profile, source_path, '
+                'seq, state, state_friendly')
+            c.execute(
+                'CREATE TABLE service_workers(type TEXT, origin TEXT, key TEXT, value TEXT, '
+                'modification_time TEXT, interpretation TEXT, profile TEXT, source_path TEXT, '
+                'seq INT, state INT, state_friendly TEXT, '
+                + ', '.join(f'{name} {sql_type}' for name, sql_type in service_worker_columns) + ')')
+            service_worker_insert = (
+                f'INSERT INTO service_workers ({service_worker_shared_columns}, '
+                + ', '.join(name for name, _ in service_worker_columns) + ') VALUES ('
+                + ', '.join(['?'] * (11 + len(service_worker_columns))) + ')')
+
             c.execute(
                 'CREATE TABLE installed_extensions(name TEXT, description TEXT, version TEXT, ext_id TEXT, '
                 'profile TEXT, permissions TEXT, manifest TEXT)')
@@ -3209,6 +3246,7 @@ class AnalysisSession(object):
                     return str(value)
                 return value
 
+            unhandled_timeline = collections.Counter()
             for item in self.parsed_artifacts:
                 if item.row_type.startswith('url'):
                     c.execute(
@@ -3301,12 +3339,34 @@ class AnalysisSession(object):
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
-                elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session', 'permission action', 'profile creation')):
+                elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session',
+                                               'permission action', 'profile creation', 'extension')):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
+
+                else:
+                    # Previously fell through with no branch and no message, the way every
+                    # Service Worker row used to go missing from the storage table. The
+                    # else matters more than any one branch: it is what makes the next
+                    # unhandled row_type a reported number rather than a silent absence.
+                    unhandled_timeline[item.row_type] += 1
+
+            for row_type, count in unhandled_timeline.most_common():
+                log.error(f'{count} "{row_type}" record(s) are MISSING from the SQLite '
+                          f'timeline table; no INSERT branch handles that row_type')
+
+            def service_worker_cell(name, value):
+                # Times go through sql_date like every other date column. Anything else
+                # sqlite3 cannot bind directly is stored as its text form rather than
+                # failing the insert.
+                if name in service_worker_time_columns or isinstance(value, datetime.datetime):
+                    return sql_date(value)
+                if value is None or isinstance(value, (str, int, float, bytes)):
+                    return value
+                return str(value)
 
             unhandled_storage = collections.Counter()
             for item in self.parsed_storage:
@@ -3339,15 +3399,17 @@ class AnalysisSession(object):
                          item.file_exists, item.file_size, item.magic_results, item.file_sha256))
 
                 elif item.row_type.startswith('service worker'):
+                    # Written to service_workers, not storage; see that table's definition.
                     c.execute(
-                        'INSERT INTO storage (type, origin, key, value, modification_time, '
-                        'interpretation, profile, source_path, seq, state, state_friendly) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, getattr(item, 'origin', None), item.key, item.value,
+                        service_worker_insert,
+                        (item.row_type, getattr(item, 'origin', None), item.key,
+                         service_worker_cell('value', item.value),
                          sql_date(getattr(item, 'last_modified', None)),
                          getattr(item, 'interpretation', None), item.profile,
                          item.source_path, getattr(item, 'seq', None),
-                         state_to_int(item.state), item.state))
+                         state_to_int(item.state), item.state,
+                         *(service_worker_cell(name, getattr(item, name, None))
+                           for name, _ in service_worker_columns)))
 
                 elif item.row_type.startswith('indexed'):
                     c.execute(
