@@ -23,7 +23,7 @@
     "chrome:sync_data:entry": 1
   },
   "generated_by": {
-    "generated_utc": "2026-09-07T18:11:34Z",
+    "generated_utc": "2026-09-14T06:47:05Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -86,8 +86,8 @@
         "IndexedDB": {
           "count": 0,
           "status": "partial",
-          "unparsed_records": 0,
-          "unparsed_sources": 1
+          "unparsed_records": 1,
+          "unparsed_sources": 0
         },
         "Login Data": {
           "count": 0,

@@ -9,7 +9,7 @@
     "chrome:file_system:entry": 3,
     "chrome:history:file_downloaded": 31,
     "chrome:history:page_visited": 545,
-    "chrome:indexeddb:entry": 9116,
+    "chrome:indexeddb:entry": 9228,
     "chrome:local_storage:entry": 10495,
     "chrome:login_item:entry": 13,
     "chrome:preferences:entry": 160,
@@ -28,7 +28,7 @@
     "chrome:sync_data:entry": 8354
   },
   "generated_by": {
-    "generated_utc": "2026-09-06T00:32:38Z",
+    "generated_utc": "2026-09-14T06:55:41Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -143,10 +143,10 @@
           "unparsed_sources": 0
         },
         "IndexedDB": {
-          "count": 7953,
+          "count": 8065,
           "status": "partial",
-          "unparsed_records": 0,
-          "unparsed_sources": 4
+          "unparsed_records": 5,
+          "unparsed_sources": 0
         },
         "Local Extension Settings": {
           "count": 1,
@@ -422,5 +422,5 @@
     }
   },
   "root": "bf4sa_2026_bob-2",
-  "total_records": 79893
+  "total_records": 80005
 }
