@@ -61,6 +61,106 @@ class NoneSafeWorksheet(xlsxwriter.worksheet.Worksheet):
         return super().write_number(row, col, number, cell_format)
 
 
+# Rows in one .xlsx worksheet. Past this, xlsxwriter's write methods return -1 and leave
+# the cell out of the file without raising. Module-level so tests can lower it.
+XLSX_MAX_ROWS = 1048576
+
+
+class RolloverWorksheet(object):
+    """A worksheet that continues onto "Name (2)", "Name (3)", ... once it is full.
+
+    xlsxwriter does not raise when a row is past the end of the sheet: the write
+    returns -1 and the cell is simply not in the workbook, so a large Timeline or
+    Storage sheet used to lose its tail with nothing logged (#359). The XLSX writers
+    keep one running row number per collection; this maps that number onto the sheet
+    with room for it. The title bar, column headers, column widths and frozen panes are
+    repeated on every continuation, and each sheet gets its own autofilter.
+
+    Rows before ``header_rows`` are the header and are written to every sheet. A merged
+    range in the data must fit on one sheet, which holds for the single-row group
+    headers these writers use.
+    """
+
+    def __init__(self, workbook, name, continuation_name, header_rows=2):
+        self._workbook = workbook
+        self._name = name
+        self._continuation_name = continuation_name
+        self._header_rows = header_rows
+        self._rows_per_sheet = XLSX_MAX_ROWS - header_rows
+        self._setup = []
+        self.sheets = [workbook.add_worksheet(name)]
+
+    def _locate(self, row, add_sheets=True):
+        """Return the sheet index and the row on that sheet for a running row number."""
+        if row < self._header_rows:
+            return None, row
+        index, offset = divmod(row - self._header_rows, self._rows_per_sheet)
+        while add_sheets and index >= len(self.sheets):
+            self._add_continuation()
+        return index, self._header_rows + offset
+
+    def _add_continuation(self):
+        name = self._continuation_name(self._name)
+        log.warning(f'XLSX sheet "{self.sheets[-1].name}" reached {XLSX_MAX_ROWS:,} rows; '
+                    f'continuing on "{name}"')
+        sheet = self._workbook.add_worksheet(name)
+        for method, args, kwargs in self._setup:
+            getattr(sheet, method)(*args, **kwargs)
+        self.sheets.append(sheet)
+
+    def _on_every_sheet(self, method, args, kwargs=None):
+        kwargs = kwargs or {}
+        self._setup.append((method, args, kwargs))
+        result = 0
+        for sheet in self.sheets:
+            result = getattr(sheet, method)(*args, **kwargs)
+        return result
+
+    def _write(self, method, row, col, args):
+        index, sheet_row = self._locate(row)
+        if index is None:
+            return self._on_every_sheet(method, (row, col) + args)
+        return getattr(self.sheets[index], method)(sheet_row, col, *args)
+
+    @xlsxwriter.worksheet.convert_cell_args
+    def write(self, row, col, *args):
+        return self._write('write', row, col, args)
+
+    @xlsxwriter.worksheet.convert_cell_args
+    def write_string(self, row, col, *args):
+        return self._write('write_string', row, col, args)
+
+    @xlsxwriter.worksheet.convert_cell_args
+    def write_number(self, row, col, *args):
+        return self._write('write_number', row, col, args)
+
+    @xlsxwriter.worksheet.convert_range_args
+    def merge_range(self, first_row, first_col, last_row, last_col, *args):
+        if last_row < self._header_rows:
+            return self._on_every_sheet('merge_range', (first_row, first_col, last_row, last_col) + args)
+        index, sheet_row = self._locate(first_row)
+        return self.sheets[index].merge_range(
+            sheet_row, first_col, sheet_row + last_row - first_row, last_col, *args)
+
+    def set_column(self, *args, **kwargs):
+        return self._on_every_sheet('set_column', args, kwargs)
+
+    def freeze_panes(self, *args, **kwargs):
+        return self._on_every_sheet('freeze_panes', args, kwargs)
+
+    @xlsxwriter.worksheet.convert_range_args
+    def autofilter(self, first_row, first_col, last_row, last_col):
+        """Filter from the header row to ``last_row``, or to the end of each full sheet."""
+        index, sheet_row = self._locate(last_row, add_sheets=False)
+        if index is None:
+            index, sheet_row = 0, last_row
+        result = 0
+        for i, sheet in enumerate(self.sheets):
+            sheet_last = sheet_row if i == index else XLSX_MAX_ROWS - 1
+            result = sheet.autofilter(first_row, first_col, min(sheet_last, XLSX_MAX_ROWS - 1), last_col)
+        return result
+
+
 class HindsightEncoder(json.JSONEncoder):
     """This JSONEncoder translates several Hindsight HistoryItem classes into
     JSON objects for use in the JSONL output format. It also makes changes
@@ -1559,7 +1659,7 @@ class AnalysisSession(object):
                     pass  # different drives on Windows -> keep absolute path
             return source
 
-        w = workbook.add_worksheet('Timeline')
+        w = RolloverWorksheet(workbook, 'Timeline', get_unique_sheet_name)
         used_sheet_names.add('timeline')
 
         # Define cell formats
@@ -1976,7 +2076,7 @@ class AnalysisSession(object):
         ##############################
         # Storage worksheet
         ##############################
-        s = workbook.add_worksheet('Storage')
+        s = RolloverWorksheet(workbook, 'Storage', get_unique_sheet_name)
         used_sheet_names.add('storage')
         # Title bar
         s.merge_range('A1:G1', f'Hindsight Internet History Forensics (v{__version__}) - Storage', title_header_format)
@@ -2093,7 +2193,7 @@ class AnalysisSession(object):
         #########################################
         # Service Workers worksheet
         #########################################
-        sw = workbook.add_worksheet('Service Workers')
+        sw = RolloverWorksheet(workbook, 'Service Workers', get_unique_sheet_name)
         used_sheet_names.add('service workers')
 
         # Title bar
@@ -2569,7 +2669,7 @@ class AnalysisSession(object):
         #########################################
         # Extension Data worksheet
         #########################################
-        ext = workbook.add_worksheet('Extension Data')
+        ext = RolloverWorksheet(workbook, 'Extension Data', get_unique_sheet_name)
         used_sheet_names.add('extension data')
         # Title bar
         ext.merge_range('A1:G1', f'Hindsight Internet History Forensics (v{__version__}) - Extension Data', title_header_format)
@@ -2634,7 +2734,7 @@ class AnalysisSession(object):
         #########################################
         # Sync Data worksheet
         #########################################
-        sync_ws = workbook.add_worksheet('Sync Data')
+        sync_ws = RolloverWorksheet(workbook, 'Sync Data', get_unique_sheet_name)
         used_sheet_names.add('sync data')
         # Title bar
         sync_ws.merge_range('A1:E1', f'Hindsight Internet History Forensics (v{__version__}) - Sync Data', title_header_format)
@@ -2704,7 +2804,7 @@ class AnalysisSession(object):
         def write_presentation_sheet(d, sheet_label):
             """Render one plugin/preferences 'presentation' block as its own worksheet."""
             sheet_name = get_unique_sheet_name(d['presentation']['title'])
-            p = workbook.add_worksheet(sheet_name)
+            p = RolloverWorksheet(workbook, sheet_name, get_unique_sheet_name)
             title = d['presentation']['title']
             if 'version' in d['presentation']:
                 title += f" (v{d['presentation']['version']})"
@@ -2760,7 +2860,7 @@ class AnalysisSession(object):
             WINDOW_TYPES = {0: 'Normal', 1: 'App', 2: 'App Popup', 3: 'DevTools'}
 
             try:
-                sess_ws = workbook.add_worksheet(get_unique_sheet_name('Sessions'))
+                sess_ws = RolloverWorksheet(workbook, get_unique_sheet_name('Sessions'), get_unique_sheet_name)
 
                 # Title bar
                 sess_ws.merge_range('A1:I1', f'Hindsight Internet History Forensics (v{__version__})'
@@ -2911,7 +3011,7 @@ class AnalysisSession(object):
         installed_extensions = getattr(self, 'installed_extensions', None)
         if installed_extensions and installed_extensions.get('data'):
             try:
-                ext_ws = workbook.add_worksheet(get_unique_sheet_name('Extensions'))
+                ext_ws = RolloverWorksheet(workbook, get_unique_sheet_name('Extensions'), get_unique_sheet_name)
 
                 # Title bar
                 ext_ws.merge_range('A1:H1', f'Hindsight Internet History Forensics (v{__version__})'
@@ -3110,7 +3210,8 @@ class AnalysisSession(object):
         # Stable sort preserves insertion order within a group (e.g. multiple per-profile
         # Preferences/Sessions sheets) and sends any unlisted sheet to the end.
         def _tab_order(ws):
-            name = ws.name
+            # A continuation such as "Storage (2)" sorts with the sheet it continues.
+            name = re.sub(r' \(\d+\)$', '', ws.name)
             if name == 'Timeline':
                 return 0
             if name.startswith('Sessions'):
