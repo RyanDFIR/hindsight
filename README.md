@@ -42,6 +42,7 @@ Command Line Options:
 | -c or --cache  | Path to the cache directory; only needed if the directory is outside the given "input" directory. Mac systems are setup this way by default. |
 | -b or --browser_type | The type of browser the input files belong to. Supported options are Chrome (default) and Firefox.
 | -l or --log	 | Location Hindsight should log to (will append if exists) |
+| --log-level | How much detail to write to the log: debug, info (the default), warning or error. Use debug when reporting a bug |
 | -h or --help   | Shows these options and the default Chrome data locations |
 | -t or --timezone | Display timezone for the timestamps in XLSX output |
 | --only or --artifacts | Only parse these artifacts (comma-separated; repeatable) |

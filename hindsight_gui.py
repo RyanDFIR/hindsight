@@ -12,6 +12,7 @@ try:
     import pyhindsight
     import pyhindsight.plugins
     from pyhindsight.analysis import AnalysisSession
+    from pyhindsight.logging_setup import DEFAULT_LOG_LEVEL, configure_logging
     from pyhindsight.utils import get_rich_banner, make_stdout_resilient
 except ImportError as missing:
     if "ccl_chromium_reader" not in str(missing):
@@ -168,10 +169,10 @@ def do_run():
         temp_dir = os.path.join(base_dir, temp_dir)
     analysis_session.temp_dir = temp_dir
 
-    # Set up logging
-    logging.basicConfig(filename=analysis_session.log_path, level=logging.DEBUG,
-                        format='%(asctime)s.%(msecs).03d | %(levelname).01s | %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S')
+    # Set up logging. Shared with the CLI so the two cannot drift; see
+    # pyhindsight.logging_setup.
+    log_level = bottle.request.forms.get('log_level', DEFAULT_LOG_LEVEL)
+    configure_logging(analysis_session.log_path, log_level, extra_loggers=(__name__,))
     log = logging.getLogger(__name__)
     # Suppress ResourceWarning spam from long-running GUI sessions.
     warnings.filterwarnings("ignore", category=ResourceWarning)
