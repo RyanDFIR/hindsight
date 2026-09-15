@@ -29,6 +29,11 @@ class _Database:
     def get_object_store_by_name(self, name):
         return self._stores[name]
 
+    def __repr__(self):
+        # The warning names the database by repr; the default one carries a memory
+        # address, whose hex digits can contain any count a test asserts is absent.
+        return '<database>'
+
 
 class _WrappedIndexDB:
     def __init__(self, database):
@@ -78,8 +83,8 @@ class TestIndexedDBFailureReason(unittest.TestCase):
         failure = [m for m in messages if '.certs' in m]
         self.assertEqual(1, len(failure), messages)
         self.assertIn('1 records read from this object store before the failure', failure[0])
-        self.assertNotIn('82', failure[0])
-        self.assertNotIn('83', failure[0])
+        self.assertNotIn('82 records', failure[0])
+        self.assertNotIn('83 records', failure[0])
 
     def test_an_exception_with_no_message_is_named_by_its_type(self):
         database = _Database({'certs': _ObjStore(0, NotImplementedError())})
