@@ -4968,7 +4968,7 @@ class Chrome(WebBrowser):
         resolved_count = sum(1 for v in self.kg_entities.values() if v is not None)
         log.info(f'Resolved {resolved_count}/{len(self.kg_entities)} Knowledge Graph entity ID(s)')
 
-    def process(self, api_keys=None):
+    def parse_profile(self, api_keys=None):
         supported_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
                                'Login Data', 'Login Data For Account'
                                'Extension Cookies', 'Network Action Predictor', 'DIPS']

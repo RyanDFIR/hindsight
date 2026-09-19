@@ -8,7 +8,6 @@ import os
 import sqlite3
 import sys
 import time
-import uuid
 import xlsxwriter
 import xlsxwriter.worksheet
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1207,15 +1206,6 @@ class AnalysisSession(object):
         elif self.timezone is None:
             self.timezone = datetime.timezone.utc
 
-        # Give this run its own subdirectory of the temp directory. Copies inside it are
-        # named only after the database (<temp_dir>/History), and the default temp path is
-        # a fixed location next to the binary, so two Hindsight runs at once would write
-        # to the same <temp_dir>/History and each could end up parsing the other's profile
-        # data -- or delete the directory while the other was still reading from it.
-        # Isolating per run also keeps each run's cleanup from touching another's files.
-        if self.temp_dir:
-            self.temp_dir = os.path.join(self.temp_dir, f'run-{os.getpid()}-{uuid.uuid4().hex[:8]}')
-
         # Redact secret values before dumping the options. Log files are routinely
         # attached to bug reports, so the key names are kept (useful for confirming
         # which config was picked up) but the values never reach disk.
@@ -1281,13 +1271,7 @@ class AnalysisSession(object):
                                           no_copy=self.no_copy, temp_dir=self.temp_dir,
                                           originator_guids=self.originator_guids,
                                           artifact_filter=self.artifact_filter)
-                # Both pipelines copy databases into the same per-run directory, so the
-                # teardown lives here, not in either browser's process(), and runs even
-                # if parsing raises.
-                try:
-                    browser_analysis.process(api_keys=self.api_keys)
-                finally:
-                    browser_analysis.remove_temp_dir()
+                browser_analysis.process(api_keys=self.api_keys)
                 self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.parsed_extension_data.extend(browser_analysis.parsed_extension_data)
@@ -1330,10 +1314,7 @@ class AnalysisSession(object):
                                            timezone=self.timezone,
                                            no_copy=self.no_copy, temp_dir=self.temp_dir,
                                            artifact_filter=self.artifact_filter)
-                try:
-                    browser_analysis.process()
-                finally:
-                    browser_analysis.remove_temp_dir()
+                browser_analysis.process()
                 self.parsed_artifacts.extend(browser_analysis.parsed_artifacts)
                 self.parsed_storage.extend(browser_analysis.parsed_storage)
                 self.record_profile_results(found_profile_path, browser_analysis)

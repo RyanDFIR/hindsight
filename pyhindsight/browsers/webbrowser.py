@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import tempfile
 import typing
 import urllib.parse
 import rich.align
@@ -507,27 +508,60 @@ class WebBrowser(object):
         self.preferences = []
         self.no_copy = no_copy
         self.temp_dir = temp_dir
+        # The directory copy_dir() made for this browser's database copies, if any.
+        self._copy_dir = None
         self.origin_hashes = {}
         self.installed_extensions = {}
 
         if self.version is None:
             self.version = []
 
-    def remove_temp_dir(self):
-        """Delete the directory this profile's databases were copied into.
+    def process(self, *args, **kwargs):
+        """Parse the profile, then delete the database copies made while parsing it.
 
-        Copies are made only when `no_copy` is off, and the directory only exists once a
-        database has actually been copied, so its absence is normal. Called once per
-        profile by the analysis session, whichever browser parsed it.
+        The teardown lives here rather than in each browser's parse_profile(), so it runs
+        for anything that drives a browser directly (a library caller as well as the
+        analysis session), and runs even when parsing raises.
         """
-        if self.no_copy or not self.temp_dir:
+        try:
+            return self.parse_profile(*args, **kwargs)
+        finally:
+            self.remove_temp_dir()
+
+    def parse_profile(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def copy_dir(self):
+        """The directory this browser copies databases into, created on first use.
+
+        It is a new, uniquely named directory under `temp_dir` (or the system temp
+        directory when there is none), used by this browser alone. Copies inside it are
+        named only after the database (<dir>/History), so a shared directory would let two
+        profiles, or two Hindsight runs using the same default temp path, read or delete
+        each other's copies. Creating it here is also what makes remove_temp_dir() safe:
+        it deletes only this directory, never the caller's `temp_dir`.
+        """
+        if self._copy_dir is None:
+            if self.temp_dir:
+                os.makedirs(self.temp_dir, exist_ok=True)
+            self._copy_dir = tempfile.mkdtemp(
+                prefix=f'profile-{os.getpid()}-', dir=self.temp_dir or None)
+        return self._copy_dir
+
+    def remove_temp_dir(self):
+        """Delete the directory this browser's database copies were made in.
+
+        Only the directory copy_dir() created is removed. If nothing was copied (including
+        under `no_copy`, where databases are read in place), there is nothing to delete.
+        """
+        if self._copy_dir is None:
             return
-        if os.path.isdir(self.temp_dir):
-            log.info(f'Deleting temporary directory {self.temp_dir}')
-            try:
-                shutil.rmtree(self.temp_dir)
-            except Exception as e:
-                log.error(f'Exception deleting temporary directory: {e}')
+        copy_dir, self._copy_dir = self._copy_dir, None
+        log.info(f'Deleting temporary directory {copy_dir}')
+        try:
+            shutil.rmtree(copy_dir)
+        except Exception as e:
+            log.error(f'Exception deleting temporary directory {copy_dir}: {e}')
 
     def describe_open_failure(self, default='could not be opened'):
         """Why the last database open failed, for a parser to attach to an unparsed source.
