@@ -8,7 +8,6 @@ import os
 import sqlite3
 import sys
 import time
-import uuid
 import xlsxwriter
 import xlsxwriter.worksheet
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1207,15 +1206,6 @@ class AnalysisSession(object):
                 self.timezone = datetime.timezone.utc
         elif self.timezone is None:
             self.timezone = datetime.timezone.utc
-
-        # Give this run its own subdirectory of the temp directory. Copies inside it are
-        # named only after the database (<temp_dir>/History), and the default temp path is
-        # a fixed location next to the binary, so two Hindsight runs at once would write
-        # to the same <temp_dir>/History and each could end up parsing the other's profile
-        # data -- or delete the directory while the other was still reading from it.
-        # Isolating per run also keeps each run's cleanup from touching another's files.
-        if self.temp_dir:
-            self.temp_dir = os.path.join(self.temp_dir, f'run-{os.getpid()}-{uuid.uuid4().hex[:8]}')
 
         # Redact secret values before dumping the options. Log files are routinely
         # attached to bug reports, so the key names are kept (useful for confirming

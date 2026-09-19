@@ -2936,7 +2936,7 @@ class Firefox(WebBrowser):
         self.parsed_artifacts.extend(results)
         return unparsed.result(len(results))
 
-    def process(self):
+    def parse_profile(self):
         try:
             input_listing = os.listdir(self.profile_path)
         except OSError as e:

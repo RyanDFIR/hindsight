@@ -12,7 +12,6 @@ import datetime
 import re
 import json
 import logging
-import shutil
 import puremagic
 import base64
 import ccl_chromium_reader
@@ -5000,7 +4999,7 @@ class Chrome(WebBrowser):
         resolved_count = sum(1 for v in self.kg_entities.values() if v is not None)
         log.info(f'Resolved {resolved_count}/{len(self.kg_entities)} Knowledge Graph entity ID(s)')
 
-    def process(self, api_keys=None):
+    def parse_profile(self, api_keys=None):
         supported_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
                                'Login Data', 'Login Data For Account'
                                'Extension Cookies', 'Network Action Predictor', 'DIPS']
@@ -5349,17 +5348,6 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
         self.parsed_storage.sort()
-
-        # Clean temp directory after processing profile
-        if not self.no_copy:
-            # The directory is only created when a database is actually copied into it,
-            # so its absence is normal rather than an error worth reporting.
-            if os.path.isdir(self.temp_dir):
-                log.info(f'Deleting temporary directory {self.temp_dir}')
-                try:
-                    shutil.rmtree(self.temp_dir)
-                except Exception as e:
-                    log.error(f'Exception deleting temporary directory: {e}')
 
     class URLItem(WebBrowser.URLItem):
         def decode_transition(self):
