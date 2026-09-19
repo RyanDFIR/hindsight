@@ -42,6 +42,17 @@ class TestRemovedWebDataColumns(unittest.TestCase):
         self.assertEqual((63, 70), (chrome.version[0], chrome.version[-1]))
 
 
+class TestLoginDataTables(unittest.TestCase):
+
+    def test_compromised_credentials_means_chrome_80_to_88(self):
+        # Created in Chrome 80, and dropped in 89 when insecure_credentials replaced it.
+        # This used to be read as 83+, which put magnet.ctf_2020 (Chrome 80) at 83.
+        chrome = Chrome('unused')
+        chrome.structure = {'Login Data': {'compromised_credentials': ['url', 'username']}}
+        chrome.determine_version()
+        self.assertEqual((80, 88), (chrome.version[0], chrome.version[-1]))
+
+
 class TestSchemaProbeFailure(unittest.TestCase):
     """A schema probe that can't query a database must skip it, not end the run."""
 

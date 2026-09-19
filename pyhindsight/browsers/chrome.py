@@ -302,7 +302,9 @@ class Chrome(WebBrowser):
             if 'field_info' in list(self.structure['Login Data'].keys()):
                 trim_lesser_versions(80)
             if 'compromised_credentials' in list(self.structure['Login Data'].keys()):
-                trim_lesser_versions(83)
+                # Created in Chrome 80 (Login Data schema 26). Chrome 89 moved its rows to
+                # insecure_credentials and dropped it.
+                possible_versions[:] = [x for x in possible_versions if 80 <= x < 89]
             if 'insecure_credentials' in list(self.structure['Login Data'].keys()):
                 trim_lesser_versions(89)
             log.debug(f' - Finishing possible versions: {possible_versions}')
