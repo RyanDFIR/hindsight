@@ -509,6 +509,8 @@ class WebBrowser(object):
         self.display_version = display_version
         self.timezone = timezone
         self.structure = structure
+        # {database: the schema version in its meta table}, read by build_structure.
+        self.schema_versions = {}
         self.parsed_artifacts = []
         self.parsed_storage = []
         self.parsed_extension_data = []
@@ -723,6 +725,17 @@ class WebBrowser(object):
                     self.structure[database][table['name']] = []
                     for column in columns:
                         self.structure[database][table['name']].append(column['name'])
+
+                # The schema version Chrome recorded in the meta table (sql::MetaTable). Only the
+                # 'version' row is read; other rows can hold binary sync state.
+                if 'meta' in self.structure[database]:
+                    try:
+                        cursor.execute("SELECT value FROM meta WHERE key = 'version'")
+                        row = cursor.fetchone()
+                        if row:
+                            self.schema_versions[database] = int(row['value'])
+                    except (sqlite3.Error, TypeError, ValueError) as e:
+                        log.debug(f' - Could not read the schema version of {database}: {e}')
             finally:
                 conn.close()
 

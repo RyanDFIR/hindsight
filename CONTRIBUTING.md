@@ -126,6 +126,24 @@ If you would rather not download several gigabytes, that is fine. Say in the pul
 that you did not run the corpus tests, and a maintainer will regenerate any baseline your
 change moves.
 
+## Refreshing the Chrome schema versions
+
+Hindsight works out which Chrome version last opened a profile from the schema version
+each database records in its `meta` table. The table that maps those numbers to Chrome
+versions, `pyhindsight/browsers/chromium_schema_versions.py`, is generated from the
+Chromium source at each release tag. Chrome ships a new version every two weeks, so a
+scheduled workflow (`refresh-schema-versions.yml`) refreshes it every Wednesday and keeps
+a pull request open with the changes. To refresh it by hand:
+
+```
+python tools/update_chromium_schema_versions.py
+```
+
+It reads only releases that are new since the last run, which takes a few seconds, and
+prints what changed. It needs git and network access. If Chromium has moved one of the
+source files it reads, the script names the database and exits with an error; find the
+file's new path and add it to `DATABASES` at the top of the script.
+
 ## Opening a pull request
 
 A few things that make review quick:
