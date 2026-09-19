@@ -146,6 +146,15 @@ class TestDetermineVersionFromMeta(unittest.TestCase):
             chrome.determine_version()
         self.assertEqual([80], chrome.version)
 
+    def test_each_databases_schema_version_is_logged_at_info(self):
+        # The default log level is INFO, and this is what says which database set the range.
+        chrome = Chrome('unused')
+        chrome.structure = {'History': {}}
+        chrome.schema_versions = {'History': 42}
+        with self.assertLogs('pyhindsight.browsers.chrome', level='INFO') as logs:
+            chrome.determine_version()
+        self.assertIn(' - History schema version 42: Chrome 79-84', '\n'.join(logs.output))
+
     def test_the_column_checks_run_when_the_data_cannot_place_a_version(self):
         chrome = Chrome('unused')
         chrome.structure = {'History': {'visits': ['id', 'visit_duration']}}

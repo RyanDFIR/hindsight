@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pyhindsight import __version__
 from pyhindsight.artifact_filter import ArtifactFilter
+from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.browsers.firefox import Firefox
 from pyhindsight.browsers.webbrowser import (
@@ -1233,6 +1234,12 @@ class AnalysisSession(object):
 
         # Analysis start time
         log.info("Starting analysis")
+        # A Hindsight older than the profile it reads can't place that profile's Chrome
+        # version, so say where this copy's knowledge stops.
+        newest_chrome = max(chromium_schema_versions.RELEASE_TAGS)
+        log.info(f'Chrome version data goes up to Chrome {newest_chrome} (generated '
+                 f'{chromium_schema_versions.GENERATED}); a profile from a newer Chrome is '
+                 f'reported as {newest_chrome} at most.')
         if self.artifact_filter.is_active:
             log.info(f'Artifact selection in effect -- {self.artifact_filter.describe()}')
 

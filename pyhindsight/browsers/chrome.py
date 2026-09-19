@@ -237,8 +237,9 @@ class Chrome(WebBrowser):
             chrome_versions = chrome_versions_for_schema(database, schema_version)
             if chrome_versions is None:
                 return False
-            log.debug(f"Analyzing '{database}' schema version {schema_version}: "
-                      f"Chrome {chrome_versions[0]}-{chrome_versions[-1]}")
+            # INFO rather than DEBUG: it says which database set the detected version range.
+            log.info(f' - {database} schema version {schema_version}: Chrome '
+                     f'{chrome_versions[0]}-{chrome_versions[-1]}')
             possible_versions[:] = [x for x in possible_versions if x in chrome_versions]
             return True
 
