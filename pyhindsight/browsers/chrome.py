@@ -77,6 +77,9 @@ def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     file. A version between two releases' versions was written by a pre-release (canary,
     dev or beta) build of the later release, and maps to that release.
 
+    The data starts at Chrome 3, where Chromium's release tags do, so a version the oldest
+    release writes also maps to Chrome 1 and 2, which may have written it too.
+
     Returns None when the data can't place the version: a database it doesn't cover, or a
     version older than it goes back. A version newer than any in the data maps to the
     newest Chrome version the data has, with a warning that the data is out of date.
@@ -99,6 +102,9 @@ def chrome_versions_for_schema(database, schema_version, schema_versions=None):
             matches.append(chrome_version)
         previous = release_schema_version
     if matches:
+        oldest = min(schema_versions)
+        if matches[0] == releases[0][0] == oldest:
+            matches = list(range(1, oldest)) + matches
         return matches
 
     newest_version, newest_schema_version = releases[-1]

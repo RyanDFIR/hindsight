@@ -104,9 +104,14 @@ class TestChromeVersionsForSchema(unittest.TestCase):
         return chrome_versions_for_schema(database, schema_version, self.DATA)
 
     def test_a_version_maps_to_every_release_that_writes_it(self):
-        self.assertEqual([10, 11], self.lookup('History', 20))
         self.assertEqual([12], self.lookup('History', 22))
         self.assertEqual([13], self.lookup('History', 25))
+        self.assertEqual([13], self.lookup('DIPS', 1))
+
+    def test_the_oldest_releases_version_includes_the_releases_before_the_data(self):
+        # The data starts at 10, so 1-9 may have written History 20 too. DIPS first
+        # appears after the data starts, so its oldest version gets nothing added.
+        self.assertEqual(list(range(1, 12)), self.lookup('History', 20))
 
     def test_a_version_between_two_releases_is_a_pre_release_of_the_later_one(self):
         self.assertEqual([12], self.lookup('History', 21))
