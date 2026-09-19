@@ -165,6 +165,17 @@ class Chrome(WebBrowser):
                 else:
                     possible_versions[:] = [x for x in possible_versions if x > version]
 
+        def trim_versions_outside_if(column, table, added, removed):
+            """For a column Chrome added in 'added' and dropped in 'removed': keep versions
+            'added' <= x < 'removed' if 'column' is in 'table', and keep the versions outside
+            that range if it isn't.
+            """
+            if table:
+                if column in table:
+                    possible_versions[:] = [x for x in possible_versions if added <= x < removed]
+                else:
+                    possible_versions[:] = [x for x in possible_versions if x < added or x >= removed]
+
         def trim_lesser_versions(version):
             """Remove version numbers < 'version' from 'possible_versions'"""
             possible_versions[:] = [x for x in possible_versions if x >= version]
@@ -249,9 +260,11 @@ class Chrome(WebBrowser):
                 trim_lesser_versions_if('date_created', self.structure['Web Data']['autofill'], 35)
             if 'autofill_profiles' in list(self.structure['Web Data'].keys()):
                 trim_lesser_versions_if('language_code', self.structure['Web Data']['autofill_profiles'], 36)
-                trim_lesser_versions_if('validity_bitfield', self.structure['Web Data']['autofill_profiles'], 63)
-                trim_lesser_versions_if(
-                    'is_client_validity_states_updated', self.structure['Web Data']['autofill_profiles'], 71)
+                # Chrome 100 rebuilt autofill_profiles without these two columns
+                # (Web Data schema migration 100, MigrateToVersion100RemoveProfileValidityBitfieldColumn).
+                trim_versions_outside_if('validity_bitfield', self.structure['Web Data']['autofill_profiles'], 63, 100)
+                trim_versions_outside_if(
+                    'is_client_validity_states_updated', self.structure['Web Data']['autofill_profiles'], 71, 100)
             if 'autofill_profile_addresses' in list(self.structure['Web Data'].keys()):
                 trim_lesser_versions(86)
                 trim_lesser_versions_if('city', self.structure['Web Data']['autofill_profile_addresses'], 87)
@@ -5000,31 +5013,34 @@ class Chrome(WebBrowser):
         log.info(f'Resolved {resolved_count}/{len(self.kg_entities)} Knowledge Graph entity ID(s)')
 
     def parse_profile(self, api_keys=None):
-        supported_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
-                               'Login Data', 'Login Data For Account'
-                               'Extension Cookies', 'Network Action Predictor', 'DIPS']
+        # Databases whose table/column layout is read (build_structure) so determine_version can
+        # narrow down the Chrome version. Parsing doesn't use this list; each parser checks the
+        # directory listing itself.
+        version_probe_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
+                                   'Login Data', 'Login Data For Account',
+                                   'Extension Cookies', 'Network Action Predictor', 'DIPS']
         supported_subdirs = ['Local Storage', 'Extensions', 'File System', 'Platform Notifications', 'Network', 'Sessions', 'Service Worker', 'shared_proto_db']
         supported_jsons = ['Bookmarks', 'TransportSecurity']  # , 'Preferences']
-        supported_items = supported_databases + supported_subdirs + supported_jsons
+        supported_items = version_probe_databases + supported_subdirs + supported_jsons
         log.debug(f'Supported items: {supported_items}')
 
         input_listing = os.listdir(self.profile_path)
-        for input_file in input_listing:
-            # If input_file is in our supported db list, or if the input_file name starts with a
-            # value in supported_databases followed by '__' (used to add in dbs from additional sources)
-            if input_file in supported_databases or \
-                    input_file.startswith(tuple([db + '__' for db in supported_databases])):
-                # Process structure from Chrome database files
-                self.build_structure(self.profile_path, input_file)
 
+        # Probe Network/ first: build_structure keeps the first copy of a database it sees,
+        # and the parsers prefer Network/Cookies over a top-level Cookies when both exist.
         network_listing = None
         if 'Network' in input_listing:
-            network_listing = os.listdir(os.path.join(self.profile_path, 'Network'))
+            network_path = os.path.join(self.profile_path, 'Network')
+            network_listing = os.listdir(network_path)
             for input_file in network_listing:
-                if input_file in supported_databases or \
-                        input_file.startswith(tuple([db + '__' for db in supported_databases])):
+                if input_file in version_probe_databases:
                     # Process structure from Chrome database files
-                    self.build_structure(self.profile_path, input_file)
+                    self.build_structure(network_path, input_file)
+
+        for input_file in input_listing:
+            if input_file in version_probe_databases:
+                # Process structure from Chrome database files
+                self.build_structure(self.profile_path, input_file)
 
         # Use the structure of the input files to determine possible Chrome versions
         self.determine_version()
