@@ -16,6 +16,7 @@ import puremagic
 import base64
 import ccl_chromium_reader
 
+from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
     ParseFailures, WebBrowser, timeline_sort_key)
 from pyhindsight import utils
@@ -66,6 +67,47 @@ SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 # per store, so it keeps any one store well clear of the sheet limit but does not bound
 # the sheet's total.
 INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
+
+
+def chrome_versions_for_schema(database, schema_version, schema_versions=None):
+    """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
+
+    Chrome migrates a database to its own schema version when it opens it and records that
+    version in the database's meta table, so a match is the newest Chrome that opened the
+    file. A version between two releases' versions was written by a pre-release (canary,
+    dev or beta) build of the later release, and maps to that release.
+
+    Returns None when the data can't place the version: a database it doesn't cover, or a
+    version older than it goes back. A version newer than any in the data maps to the
+    newest Chrome version the data has, with a warning that the data is out of date.
+    """
+    if schema_versions is None:
+        schema_versions = chromium_schema_versions.SCHEMA_VERSIONS
+    if schema_version is None:
+        return None
+
+    releases = [(chrome_version, schema_versions[chrome_version][database])
+                for chrome_version in sorted(schema_versions) if database in schema_versions[chrome_version]]
+    if not releases:
+        return None
+
+    matches = []
+    previous = None
+    for chrome_version, release_schema_version in releases:
+        if schema_version == release_schema_version or \
+                (previous is not None and previous < schema_version < release_schema_version):
+            matches.append(chrome_version)
+        previous = release_schema_version
+    if matches:
+        return matches
+
+    newest_version, newest_schema_version = releases[-1]
+    if schema_version > newest_schema_version:
+        log.warning(f'{database} has schema version {schema_version}, newer than any Chrome release this '
+                    f'version of Hindsight knows (Chrome {newest_version}, schema version {newest_schema_version}). '
+                    f'Reporting it as Chrome {newest_version}; a newer Hindsight may place it exactly.')
+        return [newest_version]
+    return None
 
 
 class Chrome(WebBrowser):
@@ -130,11 +172,12 @@ class Chrome(WebBrowser):
             from Cryptodome.Protocol.KDF import PBKDF2
 
     def determine_version(self):
-        """Determine the version of Chrome databases files by looking for combinations of columns in certain tables.
-        Based on research I did to create "Chrome Evolution" tool - dfir.blog/chrome-evolution
+        """Determine the version of Chrome databases files, from the schema version each one records in its
+        meta table, or failing that by looking for combinations of columns in certain tables.
+        The column checks are based on research I did to create "Chrome Evolution" tool - dfir.blog/chrome-evolution
         """
 
-        possible_versions = list(range(1, 148))
+        possible_versions = list(range(1, max(chromium_schema_versions.RELEASE_TAGS) + 1))
         previous_possible_versions = possible_versions[:]
 
         def update_and_rollback_if_empty(version_list, prev_version_list):
@@ -180,7 +223,23 @@ class Chrome(WebBrowser):
             """Remove version numbers < 'version' from 'possible_versions'"""
             possible_versions[:] = [x for x in possible_versions if x >= version]
 
-        if 'History' in list(self.structure.keys()):
+        def narrow_to_schema_version(database):
+            """Keep the Chrome versions that write 'database's meta.version. Returns False if the schema data
+            can't place that version, so the caller runs its column checks instead.
+            """
+            schema_version = self.schema_versions.get(database)
+            chrome_versions = chrome_versions_for_schema(database, schema_version)
+            if chrome_versions is None:
+                return False
+            log.debug(f"Analyzing '{database}' schema version {schema_version}: "
+                      f"Chrome {chrome_versions[0]}-{chrome_versions[-1]}")
+            possible_versions[:] = [x for x in possible_versions if x in chrome_versions]
+            return True
+
+        # A database's meta.version pins it to the Chrome versions that write that schema version (see
+        # chromium_schema_versions). The column checks under each database only run when it can't: no meta
+        # table, or a version the data doesn't cover.
+        if 'History' in list(self.structure.keys()) and not narrow_to_schema_version('History'):
             log.debug('Analyzing \'History\' structure')
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'visits' in list(self.structure['History'].keys()):
@@ -223,7 +282,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Cookies' in list(self.structure.keys()):
+        if 'Cookies' in list(self.structure.keys()) and not narrow_to_schema_version('Cookies'):
             log.debug("Analyzing 'Cookies' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'cookies' in list(self.structure['Cookies'].keys()):
@@ -239,7 +298,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'DIPS' in list(self.structure.keys()):
+        if 'DIPS' in list(self.structure.keys()) and not narrow_to_schema_version('DIPS'):
             log.debug("Analyzing 'DIPS' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'bounces' in list(self.structure['DIPS'].keys()):
@@ -252,7 +311,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Web Data' in list(self.structure.keys()):
+        if 'Web Data' in list(self.structure.keys()) and not narrow_to_schema_version('Web Data'):
             log.debug("Analyzing 'Web Data' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'autofill' in list(self.structure['Web Data'].keys()):
@@ -289,7 +348,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Login Data' in list(self.structure.keys()):
+        if 'Login Data' in list(self.structure.keys()) and not narrow_to_schema_version('Login Data'):
             log.debug("Analyzing 'Login Data' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'logins' in list(self.structure['Login Data'].keys()):
