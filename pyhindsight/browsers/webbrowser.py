@@ -6,7 +6,6 @@ import logging
 import os
 import shutil
 import sqlite3
-import sys
 import tempfile
 import typing
 import urllib.parse
@@ -703,11 +702,12 @@ class WebBrowser(object):
                 try:
                     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                     tables = cursor.fetchall()
-                except sqlite3.OperationalError:
-                    print("\nSQLite3 error; is the Chrome profile in use?  Hindsight cannot access history files "
-                          "if Chrome has them locked.  This error most often occurs when trying to analyze a local "
-                          "Chrome installation while it is running.  Please close Chrome and try again.")
-                    sys.exit(1)
+                except sqlite3.OperationalError as e:
+                    # Skip this file for version detection rather than ending the run; the
+                    # parser that reads it reports its own failure.
+                    log.error(f' - Could not query {database} in {path} ({e}). If the browser is '
+                              'running with this profile open, close it and try again.')
+                    return
                 except:
                     log.error(f' - Could not query {database} in {path}')
                     return
