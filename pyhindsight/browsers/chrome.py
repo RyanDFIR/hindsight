@@ -12,11 +12,11 @@ import datetime
 import re
 import json
 import logging
-import shutil
 import puremagic
 import base64
 import ccl_chromium_reader
 
+from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
     ParseFailures, WebBrowser, timeline_sort_key)
 from pyhindsight import utils
@@ -77,6 +77,53 @@ def _describe_exception(e):
     """
     message = str(e)
     return f'{type(e).__name__}: {message}' if message else type(e).__name__
+
+
+def chrome_versions_for_schema(database, schema_version, schema_versions=None):
+    """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
+
+    Chrome migrates a database to its own schema version when it opens it and records that
+    version in the database's meta table, so a match is the newest Chrome that opened the
+    file. A version between two releases' versions was written by a pre-release (canary,
+    dev or beta) build of the later release, and maps to that release.
+
+    The data starts at Chrome 3, where Chromium's release tags do, so a version the oldest
+    release writes also maps to Chrome 1 and 2, which may have written it too.
+
+    Returns None when the data can't place the version: a database it doesn't cover, or a
+    version older than it goes back. A version newer than any in the data maps to the
+    newest Chrome version the data has, with a warning that the data is out of date.
+    """
+    if schema_versions is None:
+        schema_versions = chromium_schema_versions.SCHEMA_VERSIONS
+    if schema_version is None:
+        return None
+
+    releases = [(chrome_version, schema_versions[chrome_version][database])
+                for chrome_version in sorted(schema_versions) if database in schema_versions[chrome_version]]
+    if not releases:
+        return None
+
+    matches = []
+    previous = None
+    for chrome_version, release_schema_version in releases:
+        if schema_version == release_schema_version or \
+                (previous is not None and previous < schema_version < release_schema_version):
+            matches.append(chrome_version)
+        previous = release_schema_version
+    if matches:
+        oldest = min(schema_versions)
+        if matches[0] == releases[0][0] == oldest:
+            matches = list(range(1, oldest)) + matches
+        return matches
+
+    newest_version, newest_schema_version = releases[-1]
+    if schema_version > newest_schema_version:
+        log.warning(f'{database} has schema version {schema_version}, newer than any Chrome release this '
+                    f'version of Hindsight knows (Chrome {newest_version}, schema version {newest_schema_version}). '
+                    f'Reporting it as Chrome {newest_version}; a newer Hindsight may place it exactly.')
+        return [newest_version]
+    return None
 
 
 class Chrome(WebBrowser):
@@ -141,11 +188,12 @@ class Chrome(WebBrowser):
             from Cryptodome.Protocol.KDF import PBKDF2
 
     def determine_version(self):
-        """Determine the version of Chrome databases files by looking for combinations of columns in certain tables.
-        Based on research I did to create "Chrome Evolution" tool - dfir.blog/chrome-evolution
+        """Determine the version of Chrome databases files, from the schema version each one records in its
+        meta table, or failing that by looking for combinations of columns in certain tables.
+        The column checks are based on research I did to create "Chrome Evolution" tool - dfir.blog/chrome-evolution
         """
 
-        possible_versions = list(range(1, 148))
+        possible_versions = list(range(1, max(chromium_schema_versions.RELEASE_TAGS) + 1))
         previous_possible_versions = possible_versions[:]
 
         def update_and_rollback_if_empty(version_list, prev_version_list):
@@ -176,11 +224,39 @@ class Chrome(WebBrowser):
                 else:
                     possible_versions[:] = [x for x in possible_versions if x > version]
 
+        def trim_versions_outside_if(column, table, added, removed):
+            """For a column Chrome added in 'added' and dropped in 'removed': keep versions
+            'added' <= x < 'removed' if 'column' is in 'table', and keep the versions outside
+            that range if it isn't.
+            """
+            if table:
+                if column in table:
+                    possible_versions[:] = [x for x in possible_versions if added <= x < removed]
+                else:
+                    possible_versions[:] = [x for x in possible_versions if x < added or x >= removed]
+
         def trim_lesser_versions(version):
             """Remove version numbers < 'version' from 'possible_versions'"""
             possible_versions[:] = [x for x in possible_versions if x >= version]
 
-        if 'History' in list(self.structure.keys()):
+        def narrow_to_schema_version(database):
+            """Keep the Chrome versions that write 'database's meta.version. Returns False if the schema data
+            can't place that version, so the caller runs its column checks instead.
+            """
+            schema_version = self.schema_versions.get(database)
+            chrome_versions = chrome_versions_for_schema(database, schema_version)
+            if chrome_versions is None:
+                return False
+            # INFO rather than DEBUG: it says which database set the detected version range.
+            log.info(f' - {database} schema version {schema_version}: Chrome '
+                     f'{chrome_versions[0]}-{chrome_versions[-1]}')
+            possible_versions[:] = [x for x in possible_versions if x in chrome_versions]
+            return True
+
+        # A database's meta.version pins it to the Chrome versions that write that schema version (see
+        # chromium_schema_versions). The column checks under each database only run when it can't: no meta
+        # table, or a version the data doesn't cover.
+        if 'History' in list(self.structure.keys()) and not narrow_to_schema_version('History'):
             log.debug('Analyzing \'History\' structure')
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'visits' in list(self.structure['History'].keys()):
@@ -223,7 +299,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Cookies' in list(self.structure.keys()):
+        if 'Cookies' in list(self.structure.keys()) and not narrow_to_schema_version('Cookies'):
             log.debug("Analyzing 'Cookies' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'cookies' in list(self.structure['Cookies'].keys()):
@@ -239,7 +315,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'DIPS' in list(self.structure.keys()):
+        if 'DIPS' in list(self.structure.keys()) and not narrow_to_schema_version('DIPS'):
             log.debug("Analyzing 'DIPS' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'bounces' in list(self.structure['DIPS'].keys()):
@@ -252,7 +328,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Web Data' in list(self.structure.keys()):
+        if 'Web Data' in list(self.structure.keys()) and not narrow_to_schema_version('Web Data'):
             log.debug("Analyzing 'Web Data' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'autofill' in list(self.structure['Web Data'].keys()):
@@ -260,9 +336,11 @@ class Chrome(WebBrowser):
                 trim_lesser_versions_if('date_created', self.structure['Web Data']['autofill'], 35)
             if 'autofill_profiles' in list(self.structure['Web Data'].keys()):
                 trim_lesser_versions_if('language_code', self.structure['Web Data']['autofill_profiles'], 36)
-                trim_lesser_versions_if('validity_bitfield', self.structure['Web Data']['autofill_profiles'], 63)
-                trim_lesser_versions_if(
-                    'is_client_validity_states_updated', self.structure['Web Data']['autofill_profiles'], 71)
+                # Chrome 100 rebuilt autofill_profiles without these two columns
+                # (Web Data schema migration 100, MigrateToVersion100RemoveProfileValidityBitfieldColumn).
+                trim_versions_outside_if('validity_bitfield', self.structure['Web Data']['autofill_profiles'], 63, 100)
+                trim_versions_outside_if(
+                    'is_client_validity_states_updated', self.structure['Web Data']['autofill_profiles'], 71, 100)
             if 'autofill_profile_addresses' in list(self.structure['Web Data'].keys()):
                 trim_lesser_versions(86)
                 trim_lesser_versions_if('city', self.structure['Web Data']['autofill_profile_addresses'], 87)
@@ -287,7 +365,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Login Data' in list(self.structure.keys()):
+        if 'Login Data' in list(self.structure.keys()) and not narrow_to_schema_version('Login Data'):
             log.debug("Analyzing 'Login Data' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'logins' in list(self.structure['Login Data'].keys()):
@@ -300,7 +378,9 @@ class Chrome(WebBrowser):
             if 'field_info' in list(self.structure['Login Data'].keys()):
                 trim_lesser_versions(80)
             if 'compromised_credentials' in list(self.structure['Login Data'].keys()):
-                trim_lesser_versions(83)
+                # Created in Chrome 80 (Login Data schema 26). Chrome 89 moved its rows to
+                # insecure_credentials and dropped it.
+                possible_versions[:] = [x for x in possible_versions if 80 <= x < 89]
             if 'insecure_credentials' in list(self.structure['Login Data'].keys()):
                 trim_lesser_versions(89)
             log.debug(f' - Finishing possible versions: {possible_versions}')
@@ -5015,32 +5095,35 @@ class Chrome(WebBrowser):
         resolved_count = sum(1 for v in self.kg_entities.values() if v is not None)
         log.info(f'Resolved {resolved_count}/{len(self.kg_entities)} Knowledge Graph entity ID(s)')
 
-    def process(self, api_keys=None):
-        supported_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
-                               'Login Data', 'Login Data For Account'
-                               'Extension Cookies', 'Network Action Predictor', 'DIPS']
+    def parse_profile(self, api_keys=None):
+        # Databases whose table/column layout is read (build_structure) so determine_version can
+        # narrow down the Chrome version. Parsing doesn't use this list; each parser checks the
+        # directory listing itself.
+        version_probe_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
+                                   'Login Data', 'Login Data For Account',
+                                   'Extension Cookies', 'Network Action Predictor', 'DIPS']
         supported_subdirs = ['Local Storage', 'Extensions', 'File System', 'Platform Notifications', 'Network', 'Sessions', 'Service Worker', 'shared_proto_db']
         supported_jsons = ['Bookmarks', 'TransportSecurity']  # , 'Preferences']
-        supported_items = supported_databases + supported_subdirs + supported_jsons
+        supported_items = version_probe_databases + supported_subdirs + supported_jsons
         log.debug(f'Supported items: {supported_items}')
 
         input_listing = os.listdir(self.profile_path)
-        for input_file in input_listing:
-            # If input_file is in our supported db list, or if the input_file name starts with a
-            # value in supported_databases followed by '__' (used to add in dbs from additional sources)
-            if input_file in supported_databases or \
-                    input_file.startswith(tuple([db + '__' for db in supported_databases])):
-                # Process structure from Chrome database files
-                self.build_structure(self.profile_path, input_file)
 
+        # Probe Network/ first: build_structure keeps the first copy of a database it sees,
+        # and the parsers prefer Network/Cookies over a top-level Cookies when both exist.
         network_listing = None
         if 'Network' in input_listing:
-            network_listing = os.listdir(os.path.join(self.profile_path, 'Network'))
+            network_path = os.path.join(self.profile_path, 'Network')
+            network_listing = os.listdir(network_path)
             for input_file in network_listing:
-                if input_file in supported_databases or \
-                        input_file.startswith(tuple([db + '__' for db in supported_databases])):
+                if input_file in version_probe_databases:
                     # Process structure from Chrome database files
-                    self.build_structure(self.profile_path, input_file)
+                    self.build_structure(network_path, input_file)
+
+        for input_file in input_listing:
+            if input_file in version_probe_databases:
+                # Process structure from Chrome database files
+                self.build_structure(self.profile_path, input_file)
 
         # Use the structure of the input files to determine possible Chrome versions
         self.determine_version()
@@ -5364,17 +5447,6 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
         self.parsed_storage.sort()
-
-        # Clean temp directory after processing profile
-        if not self.no_copy:
-            # The directory is only created when a database is actually copied into it,
-            # so its absence is normal rather than an error worth reporting.
-            if os.path.isdir(self.temp_dir):
-                log.info(f'Deleting temporary directory {self.temp_dir}')
-                try:
-                    shutil.rmtree(self.temp_dir)
-                except Exception as e:
-                    log.error(f'Exception deleting temporary directory: {e}')
 
     class URLItem(WebBrowser.URLItem):
         def decode_transition(self):

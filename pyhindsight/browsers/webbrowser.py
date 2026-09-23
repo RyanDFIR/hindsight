@@ -3,8 +3,10 @@ import dataclasses
 import datetime
 import hashlib
 import logging
+import os
+import shutil
 import sqlite3
-import sys
+import tempfile
 import typing
 import urllib.parse
 import rich.align
@@ -507,6 +509,8 @@ class WebBrowser(object):
         self.display_version = display_version
         self.timezone = timezone
         self.structure = structure
+        # {database: the schema version in its meta table}, read by build_structure.
+        self.schema_versions = {}
         self.parsed_artifacts = []
         self.parsed_storage = []
         self.parsed_extension_data = []
@@ -521,11 +525,60 @@ class WebBrowser(object):
         self.preferences = []
         self.no_copy = no_copy
         self.temp_dir = temp_dir
+        # The directory copy_dir() made for this browser's database copies, if any.
+        self._copy_dir = None
         self.origin_hashes = {}
         self.installed_extensions = {}
 
         if self.version is None:
             self.version = []
+
+    def process(self, *args, **kwargs):
+        """Parse the profile, then delete the database copies made while parsing it.
+
+        The teardown lives here rather than in each browser's parse_profile(), so it runs
+        for anything that drives a browser directly (a library caller as well as the
+        analysis session), and runs even when parsing raises.
+        """
+        try:
+            return self.parse_profile(*args, **kwargs)
+        finally:
+            self.remove_temp_dir()
+
+    def parse_profile(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def copy_dir(self):
+        """The directory this browser copies databases into, created on first use.
+
+        It is a new, uniquely named directory under `temp_dir` (or the system temp
+        directory when there is none), used by this browser alone. Copies inside it are
+        named only after the database (<dir>/History), so a shared directory would let two
+        profiles, or two Hindsight runs using the same default temp path, read or delete
+        each other's copies. Creating it here is also what makes remove_temp_dir() safe:
+        it deletes only this directory, never the caller's `temp_dir`.
+        """
+        if self._copy_dir is None:
+            if self.temp_dir:
+                os.makedirs(self.temp_dir, exist_ok=True)
+            self._copy_dir = tempfile.mkdtemp(
+                prefix=f'profile-{os.getpid()}-', dir=self.temp_dir or None)
+        return self._copy_dir
+
+    def remove_temp_dir(self):
+        """Delete the directory this browser's database copies were made in.
+
+        Only the directory copy_dir() created is removed. If nothing was copied (including
+        under `no_copy`, where databases are read in place), there is nothing to delete.
+        """
+        if self._copy_dir is None:
+            return
+        copy_dir, self._copy_dir = self._copy_dir, None
+        log.info(f'Deleting temporary directory {copy_dir}')
+        try:
+            shutil.rmtree(copy_dir)
+        except Exception as e:
+            log.error(f'Exception deleting temporary directory {copy_dir}: {e}')
 
     def describe_open_failure(self, default='could not be opened'):
         """Why the last database open failed, for a parser to attach to an unparsed source.
@@ -651,11 +704,12 @@ class WebBrowser(object):
                 try:
                     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                     tables = cursor.fetchall()
-                except sqlite3.OperationalError:
-                    print("\nSQLite3 error; is the Chrome profile in use?  Hindsight cannot access history files "
-                          "if Chrome has them locked.  This error most often occurs when trying to analyze a local "
-                          "Chrome installation while it is running.  Please close Chrome and try again.")
-                    sys.exit(1)
+                except sqlite3.OperationalError as e:
+                    # Skip this file for version detection rather than ending the run; the
+                    # parser that reads it reports its own failure.
+                    log.error(f' - Could not query {database} in {path} ({e}). If the browser is '
+                              'running with this profile open, close it and try again.')
+                    return
                 except:
                     log.error(f' - Could not query {database} in {path}')
                     return
@@ -671,6 +725,17 @@ class WebBrowser(object):
                     self.structure[database][table['name']] = []
                     for column in columns:
                         self.structure[database][table['name']].append(column['name'])
+
+                # The schema version Chrome recorded in the meta table (sql::MetaTable). Only the
+                # 'version' row is read; other rows can hold binary sync state.
+                if 'meta' in self.structure[database]:
+                    try:
+                        cursor.execute("SELECT value FROM meta WHERE key = 'version'")
+                        row = cursor.fetchone()
+                        if row:
+                            self.schema_versions[database] = int(row['value'])
+                    except (sqlite3.Error, TypeError, ValueError) as e:
+                        log.debug(f' - Could not read the schema version of {database}: {e}')
             finally:
                 conn.close()
 
