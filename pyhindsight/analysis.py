@@ -8,13 +8,13 @@ import os
 import sqlite3
 import sys
 import time
-import uuid
 import xlsxwriter
 import xlsxwriter.worksheet
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pyhindsight import __version__
 from pyhindsight.artifact_filter import ArtifactFilter
+from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.browsers.firefox import Firefox
 from pyhindsight.browsers.webbrowser import (
@@ -1208,15 +1208,6 @@ class AnalysisSession(object):
         elif self.timezone is None:
             self.timezone = datetime.timezone.utc
 
-        # Give this run its own subdirectory of the temp directory. Copies inside it are
-        # named only after the database (<temp_dir>/History), and the default temp path is
-        # a fixed location next to the binary, so two Hindsight runs at once would write
-        # to the same <temp_dir>/History and each could end up parsing the other's profile
-        # data -- or delete the directory while the other was still reading from it.
-        # Isolating per run also keeps each run's cleanup from touching another's files.
-        if self.temp_dir:
-            self.temp_dir = os.path.join(self.temp_dir, f'run-{os.getpid()}-{uuid.uuid4().hex[:8]}')
-
         # Redact secret values before dumping the options. Log files are routinely
         # attached to bug reports, so the key names are kept (useful for confirming
         # which config was picked up) but the values never reach disk.
@@ -1243,6 +1234,12 @@ class AnalysisSession(object):
 
         # Analysis start time
         log.info("Starting analysis")
+        # A Hindsight older than the profile it reads can't place that profile's Chrome
+        # version, so say where this copy's knowledge stops.
+        newest_chrome = max(chromium_schema_versions.RELEASE_TAGS)
+        log.info(f'Chrome version data goes up to Chrome {newest_chrome} (generated '
+                 f'{chromium_schema_versions.GENERATED}); a profile from a newer Chrome is '
+                 f'reported as {newest_chrome} at most.')
         if self.artifact_filter.is_active:
             log.info(f'Artifact selection in effect -- {self.artifact_filter.describe()}')
 

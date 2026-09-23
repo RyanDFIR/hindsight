@@ -77,7 +77,8 @@ class TestCommandLineRuns(unittest.TestCase):
 
     def test_the_default_log_keeps_the_run_record_and_drops_debug(self):
         # The options and the input listing are the run's own record of what it was
-        # asked to do, so they have to survive the default log level.
+        # asked to do, so they have to survive the default log level. So does where this
+        # copy's Chrome version data stops, which says whether it can place the profile.
         with tempfile.TemporaryDirectory() as tmp:
             result = run_hindsight('-f', 'jsonl', output_dir=tmp)
             self.assertEqual(0, result.returncode, result.stderr)
@@ -85,6 +86,7 @@ class TestCommandLineRuns(unittest.TestCase):
                 body = f.read()
         self.assertIn('| I | Options: ', body)
         self.assertIn('| I | Input directory contents: ', body)
+        self.assertIn('| I | Chrome version data goes up to Chrome ', body)
         self.assertNotIn('| D | ', body)
 
     def test_list_artifacts_needs_no_input_and_exits_cleanly(self):

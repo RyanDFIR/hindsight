@@ -8,7 +8,6 @@ import sqlite3
 import struct
 import sys
 from pyhindsight import __version__
-from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -88,11 +87,8 @@ def open_sqlite_db(chrome, database_path, database_name):
 
     else:
         try:
-            # Create 'temp' directory if it doesn't exist
-            Path(chrome.temp_dir).mkdir(parents=True, exist_ok=True)
-
-            # Copy database and any WAL/SHM files to temp directory
-            db_path_to_open = os.path.join(chrome.temp_dir, database_name)
+            # Copy database and any WAL/SHM files to this browser's own temp directory
+            db_path_to_open = os.path.join(chrome.copy_dir(), database_name)
             for suffix in ['', '-wal', '-shm']:
                 src = os.path.join(database_path, database_name + suffix)
                 if os.path.exists(src):

@@ -1,0 +1,98 @@
+# Keeps pyhindsight/browsers/chromium_schema_versions.py current. Hindsight maps each
+# database's meta.version to Chrome versions with that table, and Chrome ships a new
+# version every two weeks, so a table that isn't refreshed soon stops recognizing new
+# profiles.
+#
+# Weekly, on Wednesday morning UTC, because Chrome's stable releases usually go out on
+# Tuesday.
+#
+# The job keeps one pull request open rather than opening one a week. Each run starts
+# from main, rewrites the table, and force-pushes the same branch, so the pull request
+# always shows everything that changed since main. Nothing merges on its own.
+#
+# Two GitHub limits shape this:
+# - The repository has to allow GitHub Actions to create pull requests (Settings >
+#   Actions > General > Workflow permissions), or the create step fails.
+# - A push or pull request made with GITHUB_TOKEN doesn't trigger other workflows, so the
+#   pull request would arrive with no test runs. workflow_dispatch is the exception, so
+#   the job starts the unit and corpus tests on the branch itself.
+#
+# The script exits 1 when Chromium has moved a source file it reads. The job still opens
+# the pull request with what it could read, then fails, so the failure notice goes out
+# and the log says which database needs a new path.
+name: Refresh Chrome schema versions
+
+on:
+  schedule:
+    - cron: '23 6 * * 3'
+  workflow_dispatch:
+
+concurrency:
+  group: refresh-schema-versions
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write # to start the test workflows on the branch
+
+env:
+  BRANCH: automation/refresh-chrome-schema-versions
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # Standard library only, plus git for listing tags, so there is nothing to install.
+      - name: Read new Chrome releases
+        id: refresh
+        run: |
+          set +e
+          python tools/update_chromium_schema_versions.py > refresh.txt 2>&1
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat refresh.txt
+
+      - name: Open or update the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet; then
+            echo 'The table is already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git commit -am 'Refresh the Chrome schema versions'
+          git push --force origin "$BRANCH"
+
+          {
+            echo 'Weekly refresh of pyhindsight/browsers/chromium_schema_versions.py from'
+            echo "Chromium's release tags, by tools/update_chromium_schema_versions.py."
+            echo
+            echo 'What changed since main:'
+            echo
+            echo '```'
+            cat refresh.txt
+            echo '```'
+          } > body.md
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr edit "$BRANCH" --body-file body.md
+          else
+            gh pr create --head "$BRANCH" --base main \
+              --title 'Refresh the Chrome schema versions' --body-file body.md
+          fi
+
+          gh workflow run tests.yml --ref "$BRANCH"
+          gh workflow run corpus-tests.yml --ref "$BRANCH"
+
+      - name: Fail if a database could not be read
+        if: steps.refresh.outputs.status != '0'
+        run: |
+          echo 'The script could not read every database; see "Read new Chrome releases" above.'
+          exit 1
