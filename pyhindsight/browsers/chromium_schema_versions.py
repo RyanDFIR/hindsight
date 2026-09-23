@@ -7,7 +7,7 @@ chrome_versions_for_schema in chrome.py maps a database's meta.version back to
 the Chrome versions listed here.
 """
 
-GENERATED = '2026-09-19'
+GENERATED = '2026-09-23'
 
 # {Chrome version: the tag its schema versions were read from}
 RELEASE_TAGS = {
@@ -160,11 +160,11 @@ RELEASE_TAGS = {
     149: '149.0.7827.238',
     150: '150.0.7871.255',
     151: '151.0.7922.226',
-    152: '152.0.7977.137',
+    152: '152.0.7977.143',
     153: '153.0.8010.55',
-    154: '154.0.8037.52',
-    155: '155.0.8059.8',
-    156: '156.0.8066.3',
+    154: '154.0.8037.61',
+    155: '155.0.8059.18',
+    156: '156.0.8066.11',
 }
 
 # {Chrome version: {database: schema version}}. A database is absent from Chrome
