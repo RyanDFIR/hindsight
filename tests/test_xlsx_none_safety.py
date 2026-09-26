@@ -73,6 +73,34 @@ class TestXlsxNoneSafety(unittest.TestCase):
         self.assertEqual(rows[0][16], 'Redirect (temporary)')
         self.assertEqual(rows[1][10], 'Live')
 
+    def test_long_string_is_truncated_with_marker(self):
+        # Excel caps cells at 32,767 characters. Stock xlsxwriter truncates to that
+        # limit silently, so the file stays openable but a reader can't tell the
+        # value was cut. Marking it makes the cut visible in the output itself.
+        workbook, buffer = _build_workbook()
+        worksheet = workbook.add_worksheet('long')
+
+        long_value = 'x' * 40000
+        worksheet.write_string(0, 0, long_value)
+        worksheet.write(0, 1, long_value)  # generic write() dispatch for strings
+
+        workbook.close()
+
+        rows = list(openpyxl.load_workbook(io.BytesIO(buffer.getvalue())).active.iter_rows(values_only=True))
+
+        for cell in (rows[0][0], rows[0][1]):
+            self.assertEqual(len(cell), NoneSafeWorksheet.MAX_CELL_LENGTH)
+            self.assertTrue(cell.endswith(NoneSafeWorksheet.TRUNCATION_SUFFIX))
+
+    def test_short_string_is_unaffected(self):
+        workbook, buffer = _build_workbook()
+        worksheet = workbook.add_worksheet('short')
+        worksheet.write_string(0, 0, 'a normal value')
+        workbook.close()
+
+        rows = list(openpyxl.load_workbook(io.BytesIO(buffer.getvalue())).active.iter_rows(values_only=True))
+        self.assertEqual(rows[0][0], 'a normal value')
+
     def test_a1_notation_still_works(self):
         # The overrides keep the base class's @convert_cell_args behaviour.
         workbook, buffer = _build_workbook()

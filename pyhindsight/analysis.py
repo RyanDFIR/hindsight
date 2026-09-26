@@ -45,7 +45,17 @@ class NoneSafeWorksheet(xlsxwriter.worksheet.Worksheet):
     flat JSON -- e.g. an extension's DNR rules.json -- have no LevelDB seq or offset.
     Those are absences at the source, so they are written as empty cells instead of
     being coerced to '' or 0, which would invent a value the artifact does not contain.
+
+    It also marks strings cut to fit Excel's 32,767 character-per-cell limit.
+    xlsxwriter truncates an over-length string on its own but says nothing in the
+    cell, so a reader has no way to tell the value is incomplete. Cutting it here
+    and ending it with a suffix makes the truncation visible in the output.
     """
+
+    # Excel's hard per-cell limit; xlsxwriter enforces it itself but truncates
+    # silently (xls_strmax), with no indication in the cell that it happened.
+    MAX_CELL_LENGTH = 32767
+    TRUNCATION_SUFFIX = '<TRUNCATED>'
 
     # convert_cell_args preserves the base class's support for A1 notation.
     @xlsxwriter.worksheet.convert_cell_args
@@ -53,6 +63,13 @@ class NoneSafeWorksheet(xlsxwriter.worksheet.Worksheet):
         if string is None:
             return self.write_blank(row, col, None, cell_format)
         return super().write_string(row, col, string, cell_format)
+
+    def _write_string(self, row, col, string, cell_format=None):
+        # write_string() and write()'s string branch both funnel through here, so
+        # patching this one spot marks truncation for every string-writing path.
+        if len(string) > self.MAX_CELL_LENGTH:
+            string = string[:self.MAX_CELL_LENGTH - len(self.TRUNCATION_SUFFIX)] + self.TRUNCATION_SUFFIX
+        return super()._write_string(row, col, string, cell_format)
 
     @xlsxwriter.worksheet.convert_cell_args
     def write_number(self, row, col, number=None, cell_format=None):
