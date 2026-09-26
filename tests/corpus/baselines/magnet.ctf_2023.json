@@ -8,7 +8,7 @@
     "chrome:file_system:entry": 2,
     "chrome:history:file_downloaded": 61,
     "chrome:history:page_visited": 1099,
-    "chrome:indexeddb:entry": 6978,
+    "chrome:indexeddb:entry": 7190,
     "chrome:local_storage:entry": 1014,
     "chrome:login_item:entry": 12,
     "chrome:preferences:entry": 281,
@@ -27,7 +27,7 @@
     "chrome:sync_data:entry": 1732
   },
   "generated_by": {
-    "generated_utc": "2026-09-06T00:33:09Z",
+    "generated_utc": "2026-09-14T07:02:31Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -112,10 +112,10 @@
           "unparsed_sources": 0
         },
         "IndexedDB": {
-          "count": 4751,
+          "count": 4963,
           "status": "partial",
-          "unparsed_records": 0,
-          "unparsed_sources": 1
+          "unparsed_records": 3,
+          "unparsed_sources": 0
         },
         "Local Extension Settings": {
           "count": 1,
@@ -688,5 +688,5 @@
     }
   },
   "root": "magnet.ctf_2023",
-  "total_records": 38420
+  "total_records": 38632
 }
