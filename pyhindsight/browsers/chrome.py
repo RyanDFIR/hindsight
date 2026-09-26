@@ -116,6 +116,37 @@ def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     return None
 
 
+def iterate_cache_entries(profile):
+    """Yield (key, entry, error) for a Chromium cache, one cache key at a time.
+
+    ccl's `iterate_cache` is a single generator over the whole cache, and an entry is
+    decoded inside it: a corrupt date, a short metadata buffer or a truncated data stream
+    raises there and ends the generator, so one bad entry decided how much of the cache
+    directory was read. Walking the keys and reading each through the per-key helper
+    `iterate_cache` itself uses turns that into one failed key, yielded with its error.
+
+    The helper is private to ccl_chromium_reader, which requirements.txt pins to one
+    commit; if it is ever missing, fall back to the public generator.
+    """
+    if not all(hasattr(profile, name) for name in ('_lazy_load_cache', '_yield_cache_record')):
+        for entry in profile.iterate_cache(url=None, omit_cached_data=False):
+            yield getattr(entry, 'key', None), entry, None
+        return
+
+    profile._lazy_load_cache()
+    cache = getattr(profile, '_cache', None)
+    if cache is None:
+        return
+    for key in cache.cache_keys():
+        try:
+            entries = list(profile._yield_cache_record(key, True, False))
+        except Exception as e:
+            yield key, None, e
+            continue
+        for entry in entries:
+            yield key, entry, None
+
+
 class Chrome(WebBrowser):
     def __init__(self, profile_path, browser_name=None, cache_path=None, version=None, timezone=None,
                  storage=None, available_decrypts=None, no_copy=None, temp_dir=None,
@@ -3895,7 +3926,7 @@ class Chrome(WebBrowser):
             log.info(' - Cache path is empty')
             return 0
 
-        cache_items = profile.iterate_cache(url=None, omit_cached_data=False)
+        cache_items = iterate_cache_entries(profile)
         source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
@@ -3938,7 +3969,11 @@ class Chrome(WebBrowser):
             return '; '.join(described)
 
         try:
-            for cache_item in cache_items:
+            for entry_key, cache_item, read_error in cache_items:
+                if read_error is not None:
+                    unparsed.record(getattr(entry_key, 'url', None) or '<unknown key>',
+                                    f'cache entry could not be read: {read_error}')
+                    continue
                 cache_key = getattr(cache_item, 'key', None)
                 if cache_key is None:
                     # Without a key there is no URL either, so nothing identifies what
@@ -3956,22 +3991,27 @@ class Chrome(WebBrowser):
                     # is reported as absent instead of being invented or losing the URL.
                     untimed_entries += 1
 
-                parsed_item = WebBrowser.CacheItem(
-                    profile=self.profile_path, url=cache_key.url,
-                    request_time=utils.to_datetime(
-                        metadata.request_time.replace(tzinfo=datetime.timezone.utc),
-                        self.timezone) if metadata else None,
-                    locations=describe_locations(cache_item),
-                    key=cache_key, metadata=metadata, data=cache_item.data, title=None)
+                try:
+                    parsed_item = WebBrowser.CacheItem(
+                        profile=self.profile_path, url=cache_key.url,
+                        request_time=utils.to_datetime(
+                            metadata.request_time.replace(tzinfo=datetime.timezone.utc),
+                            self.timezone) if metadata else None,
+                        locations=describe_locations(cache_item),
+                        key=cache_key, metadata=metadata, data=cache_item.data, title=None)
 
-                parsed_item.row_type = row_type
-                parsed_item.data_summary = parsed_item.create_data_summary()
-                parsed_item.stringify_http_headers()
-                parsed_item.etag = (metadata.get_attribute("etag") or [""])[0] if metadata else ''
-                parsed_item.last_modified = (metadata.get_attribute("last-modified") or [""])[0] if metadata else ''
-                # The body is already in memory (omit_cached_data=False), so this costs
-                # no extra reads.
-                parsed_item.hash_body(cache_item.was_decompressed)
+                    parsed_item.row_type = row_type
+                    parsed_item.data_summary = parsed_item.create_data_summary()
+                    parsed_item.stringify_http_headers()
+                    parsed_item.etag = (metadata.get_attribute("etag") or [""])[0] if metadata else ''
+                    parsed_item.last_modified = (metadata.get_attribute("last-modified") or [""])[0] if metadata else ''
+                    # The body is already in memory (omit_cached_data=False), so this costs
+                    # no extra reads.
+                    parsed_item.hash_body(cache_item.was_decompressed)
+                except Exception as e:
+                    # One entry's bad value is that entry's problem, not the directory's.
+                    unparsed.record(cache_key.url, f'cache entry could not be parsed: {e}')
+                    continue
                 if cache_item.data and parsed_item.body_sha256 is None:
                     # Body present but left unhashed because it could not be decoded. An
                     # empty hash cell otherwise reads as "no body", so count them.
@@ -3981,8 +4021,12 @@ class Chrome(WebBrowser):
                 results.append(parsed_item)
 
         except Exception as e:
+            # Reaching here means the cache itself (its index or key list) could not be
+            # walked, not one entry. Keep whatever was read before it failed.
             log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
-            return None
+            if not results:
+                return None
+            unparsed.source(source_item, f'cache stopped being readable part way through: {e}')
 
         if phantom_locations:
             log.info(f' - {phantom_locations} cache locations named a file not present in '
