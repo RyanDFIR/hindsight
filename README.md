@@ -36,11 +36,11 @@ Command Line Options:
 
 | Option         | Description                                             |
 | -------------- | ------------------------------------------------------- |
-| -i or --input  | Path to the Chrome(ium) "Default" directory |
+| -i or --input  | Path to a browser profile, or a parent directory to search recursively for profiles |
 | -o or --output | Name of the output file (without extension) |
 | -f or --format | Output format (default is XLSX, other options are SQLite and JSONL) |
 | -c or --cache  | Path to the cache directory; only needed if the directory is outside the given "input" directory. Mac systems are setup this way by default. |
-| -b or --browser_type | The type of browser the input files belong to. Supported options are Chrome (default) and Firefox.
+| -b or --browser_type | Force one browser for every profile: Chrome, Edge, Brave, Vivaldi, Firefox or Tor (case-insensitive; Chromium is an alias for Chrome). Omit to auto-detect each profile. |
 | -l or --log	 | Location Hindsight should log to (will append if exists) |
 | --log-level | How much detail to write to the log: debug, info (the default), warning or error. Use debug when reporting a bug |
 | -h or --help   | Shows these options and the default Chrome data locations |
@@ -48,6 +48,10 @@ Command Line Options:
 | --only or --artifacts | Only parse these artifacts (comma-separated; repeatable) |
 | --skip or --exclude | Parse everything except these artifacts (comma-separated; repeatable) |
 | --list-artifacts | Print the artifact names accepted by `--only` and `--skip`, then exit |
+
+When the input contains profiles from several browsers, omit `--browser_type` to
+let Hindsight detect each profile separately. Use the override only when you intend
+to treat every discovered profile as the specified browser.
 
 ## Selecting Which Artifacts to Parse
 
