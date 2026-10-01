@@ -3,7 +3,7 @@
     "chrome:autofill:entry": 80,
     "chrome:bookmark:entry": 21,
     "chrome:bookmark:folder": 13,
-    "chrome:cache:entry": 8952,
+    "chrome:cache:entry": 9001,
     "chrome:cookie:entry": 2217,
     "chrome:extension:installed": 56,
     "chrome:file_system:entry": 1,
@@ -23,7 +23,7 @@
     "chrome:sync_data:entry": 1
   },
   "generated_by": {
-    "generated_utc": "2026-09-07T18:11:34Z",
+    "generated_utc": "2026-09-14T05:09:50Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -36,9 +36,9 @@
           "unparsed_sources": 0
         },
         "Cache": {
-          "count": null,
-          "status": "failed",
-          "unparsed_records": 0,
+          "count": 49,
+          "status": "partial",
+          "unparsed_records": 8,
           "unparsed_sources": 0
         },
         "Cookies": {
@@ -427,5 +427,5 @@
     }
   },
   "root": "magnet.ctf_2018",
-  "total_records": 14282
+  "total_records": 14331
 }
