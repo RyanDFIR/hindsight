@@ -69,6 +69,16 @@ SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
 
 
+def _describe_exception(e):
+    """Name an exception for a failure reason, including its type.
+
+    `str(e)` alone is blank for a bare `raise NotImplementedError()`, which turns a
+    reason into `unexpected exception ()`.
+    """
+    message = str(e)
+    return f'{type(e).__name__}: {message}' if message else type(e).__name__
+
+
 def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
 
@@ -2141,10 +2151,11 @@ class Chrome(WebBrowser):
             leveldb_dirs_read += 1
 
             origin = storage_directory.split('.indexeddb')[0]
-            blob_directory = None
-            blob_path = os.path.join(idb_path, f'{origin}.indexeddb.blob')
-            if os.path.exists(blob_path):
-                blob_directory = blob_path
+            # Passed even when the directory is absent. With no blob dir ccl raises
+            # "Can't resolve blob if blob dir is not set" from outside its per-record
+            # handler, which ends the object store; with one, a record whose blob is
+            # not on disk is a FileNotFoundError the handler below can skip.
+            blob_directory = os.path.join(idb_path, f'{origin}.indexeddb.blob')
 
             # Budget for this store directory, not for the run: one huge store must not
             # eat the allowance of the ones after it.
@@ -2161,8 +2172,28 @@ class Chrome(WebBrowser):
                     database = origin_idb[database_id.dbid_no]
                     for obj_store_name in database.object_store_names:
                         obj_store = database.get_object_store_by_name(obj_store_name)
+                        # Records this object store yielded, kept or not. `results` spans
+                        # every store read so far, so it cannot say how far this one got.
+                        obj_store_records = 0
+                        store_label = f'{database}.{obj_store_name}'
+
+                        def skip_unreadable_record(key, _raw, store_label=store_label):
+                            # ccl calls this instead of raising for a record it cannot
+                            # read (a missing blob file, a value with no Blink tag, a
+                            # value the deserializer rejects) and then moves on to the
+                            # next record. Without it the first such record ends the
+                            # object store's generator and every later record is lost.
+                            error = sys.exc_info()[1]
+                            reason = _describe_exception(error) if error else 'Blink type tag not present'
+                            raw_key = getattr(key, 'raw_key', b'')
+                            unparsed.record(
+                                f'{store_label} key {raw_key.hex() if isinstance(raw_key, bytes) else raw_key}',
+                                f'record could not be read ({reason})')
+
                         try:
-                            for record in obj_store.iterate_records():
+                            for record in obj_store.iterate_records(
+                                    bad_deserializer_data_handler=skip_unreadable_record):
+                                obj_store_records += 1
                                 # Past the cap a record is counted, not kept. Reading on to
                                 # the end of the store is what lets the report say exactly
                                 # how many were left out.
@@ -2212,14 +2243,15 @@ class Chrome(WebBrowser):
                             # no way to tell which data is missing from the output.
                             unparsed.source(
                                 f'{database}.{obj_store_name}',
-                                f'unexpected exception ({e}); {len(results)} records '
-                                f'parsed before the failure')
+                                f'unexpected exception ({_describe_exception(e)}); '
+                                f'{obj_store_records} records read from this object store '
+                                f'before the failure')
             except ValueError as e:
                 unparsed.source(storage_directory, str(e))
                 continue
 
             except Exception as e:
-                unparsed.source(storage_directory, f'unexpected exception ({e})')
+                unparsed.source(storage_directory, f'unexpected exception ({_describe_exception(e)})')
                 continue
 
             finally:
