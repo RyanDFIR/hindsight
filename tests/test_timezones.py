@@ -23,6 +23,13 @@ class TestParseTimezone(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(zoneinfo.ZoneInfo(name), parse_timezone(name))
 
+    def test_iana_names_ignore_case(self):
+        # The proper spelling is what ends up in the XLSX header.
+        for text, name in (('asia/kolkata', 'Asia/Kolkata'), ('utc', 'UTC'),
+                           ('US/PACIFIC', 'US/Pacific')):
+            with self.subTest(text=text):
+                self.assertEqual(name, str(parse_timezone(text)))
+
     def test_utc_offsets(self):
         # IANA has no fixed zone for a half- or quarter-hour offset, so this form is
         # the only way to name one without knowing a city in it.
@@ -48,7 +55,7 @@ class TestParseTimezone(unittest.TestCase):
 
     def test_unusable_values(self):
         for value in (None, '', '   ', 'Mars/Olympus_Mons', 'UTC+15', 'UTC+5:75',
-                      '+123:00', 'UTC+', '5:30', '../../etc/passwd', 42):
+                      '+123:00', 'UTC+', '5:30', '../../etc/passwd', 'UTC\t+5', 42):
             with self.subTest(value=value):
                 self.assertIsNone(parse_timezone(value))
 
@@ -105,6 +112,15 @@ class TestCommandLineTimezone(unittest.TestCase):
         self.assertTrue(records)
         for record in records:
             self.assertTrue(record['datetime'].endswith('+05:30'), record['datetime'])
+
+    def test_an_unknown_timezone_is_refused(self):
+        # Falling back to UTC would shift every timestamp in the report.
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_hindsight('-f', 'jsonl', '-t', 'IST (UTC+5:30)', '--only', 'downloads',
+                                   output_dir=tmp, profile=CHROME_FIXTURE)
+            self.assertEqual(2, result.returncode)
+            self.assertIn("can't understand timezone", result.stderr)
+            self.assertFalse(os.path.exists(os.path.join(tmp, 'out.jsonl')))
 
 
 if __name__ == '__main__':

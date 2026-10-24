@@ -1,4 +1,5 @@
 import datetime
+import functools
 import hashlib
 import json
 import logging
@@ -342,6 +343,12 @@ def decode_page_transition(raw):
     return result
 
 
+@functools.lru_cache(maxsize=None)
+def _zone_names():
+    """Map each IANA zone name, lowercased, to its proper spelling."""
+    return {name.lower(): name for name in zoneinfo.available_timezones()}
+
+
 def parse_timezone(value):
     """Return the tzinfo a timezone setting names, or None if it names none.
 
@@ -370,9 +377,15 @@ def parse_timezone(value):
             return None
         return datetime.timezone(-offset if sign == '-' else offset)
 
+    # Names are matched without regard to case. Otherwise "asia/kolkata" works only on a
+    # case-insensitive filesystem, and when it does the header says "asia/kolkata".
+    name = value.strip()
+    name = _zone_names().get(name.lower(), name)
     try:
-        return zoneinfo.ZoneInfo(value.strip())
-    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        # OSError: on Windows, a name with a character no path can hold (a tab, say)
+        # fails in the file lookup rather than as "not found".
         return None
 
 
