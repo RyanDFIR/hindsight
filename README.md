@@ -85,6 +85,21 @@ quietly produce a report covering the wrong artifacts.
 Note that version detection still reads the profile's database schemas, so filtering does
 not change the detected browser version.
 
+## Decoded ETags
+
+Download and cache records keep the ETag the server sent. Most web servers and object
+stores build it from the file's modification time and size, so Hindsight reads it back
+into when the file was last changed on the server and how big it was. The result is in
+the `ETag Decoded` column of the XLSX Timeline, and in the separate `etag_format`,
+`etag_modified`, `etag_size` and `etag_notes` fields of the SQLite and JSONL output.
+
+Recognized formats are nginx, Apache httpd, IIS, ASP.NET Core, Azure Blob Storage (which
+also serves GitHub release downloads), Express, Tomcat, and the MD5 and multipart ETags
+of Amazon S3. Each decode is checked against the Last-Modified header and the byte count
+stored with the same response, and the notes say which of those agreed. A decoded value
+is still what the server claimed: it is strong corroboration where it agrees with them,
+not a substitute for hashing a recovered file.
+
 ## Default Profile Paths
 
 The Chrome default profile folder default locations are:

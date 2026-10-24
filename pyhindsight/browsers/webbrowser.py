@@ -995,6 +995,11 @@ class WebBrowser(object):
             self.etag = None
             self.last_modified = None
             self.body_sha256 = None
+            # Decoded from the ETag by AnalysisSession.apply_etag_analysis.
+            self.etag_format = None
+            self.etag_modified = None
+            self.etag_size = None
+            self.etag_notes = None
 
         def create_data_summary(self):
             if not self.data:
@@ -1075,6 +1080,11 @@ class WebBrowser(object):
             self.interrupt_reason = interrupt_reason
             self.etag = etag
             self.last_modified = last_modified
+            # Decoded from the ETag by AnalysisSession.apply_etag_analysis.
+            self.etag_format = None
+            self.etag_modified = None
+            self.etag_size = None
+            self.etag_notes = None
             self.chain_index = chain_index
             self.interrupt_reason_friendly = interrupt_reason_friendly
             self.danger_type_friendly = danger_type_friendly

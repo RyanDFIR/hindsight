@@ -98,7 +98,7 @@ class TestXlsxRowLimit(unittest.TestCase):
                     self.assertEqual(first.column_dimensions['C'].width, sheet.column_dimensions['C'].width)
 
     def test_each_sheet_filters_its_own_rows(self):
-        for base, last_column in (('Timeline', 'AG'), ('Storage', 'P')):
+        for base, last_column in (('Timeline', 'AH'), ('Storage', 'P')):
             refs = [sheet.auto_filter.ref for sheet in self._sheets(base)]
             with self.subTest(sheet=base):
                 # Full sheets filter to their last row; the last one keeps the writer's
