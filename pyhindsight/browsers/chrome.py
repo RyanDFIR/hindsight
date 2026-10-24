@@ -74,16 +74,20 @@ def iterate_leveldb_records(ldb_records, unparsed):
 
     ccl_leveldb raises ValueError when a file holds a block it does not expect, such as
     the zero-filled tail of a .log file left by an abrupt shutdown, which LevelDB itself
-    skips. Raised from RawLevelDb.iterate_records_raw(), that would end the whole run.
-    Instead, the records read before the damaged block are kept, the file is reported
-    as an unparsed source, and the remaining files are still read.
+    skips. A write batch cut short raises IndexError or struct.error instead, when it
+    claims more entries than it holds or is shorter than its 12-byte header. Raised from
+    RawLevelDb.iterate_records_raw(), any of these would end the whole run. Instead, the
+    records read before the damaged block are kept, the file is reported as an unparsed
+    source, and the remaining files are still read.
     """
     # Same order as RawLevelDb.iterate_records_raw(), which offers no per-file hook.
     for ldb_file in sorted(ldb_records._files, key=lambda f: f.file_no):
         try:
             yield from ldb_file
-        except ValueError as e:
-            unparsed.source(ldb_file.path, f'damaged LevelDB data ({e or "unexpected block"})')
+        except (ValueError, IndexError, struct.error) as e:
+            # ccl raises a bare ValueError() for an unknown block type, which has no
+            # message; an exception object is always truthy, so test its text.
+            unparsed.source(ldb_file.path, f'damaged LevelDB data ({str(e) or "unexpected block"})')
 
 
 def chrome_versions_for_schema(database, schema_version, schema_versions=None):

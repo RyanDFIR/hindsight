@@ -44,6 +44,34 @@ class TestDamagedLevelDbLog(unittest.TestCase):
         self.assertEqual(1, len(unparsed.sources))
         self.assertTrue(unparsed.sources[0][0].endswith('000003.log'))
         self.assertTrue(unparsed.result(len(keys)).is_partial)
+        # ccl's ValueError for an unknown block type has no message of its own.
+        self.assertEqual('damaged LevelDB data (unexpected block)', unparsed.sources[0][1])
+
+    def test_a_write_batch_cut_short_is_also_reported(self):
+        # These raise IndexError and struct.error from ccl rather than ValueError.
+        kept = _log_entry(1, b'before', b'kept')
+        too_few_entries = struct.pack('<QI', 2, 3) + bytes([1, 5]) + b'after' + bytes([1]) + b'x'
+        cases = {
+            'claims more entries than it holds':
+                struct.pack('<IHB', 0, len(too_few_entries), 1) + too_few_entries,
+            'shorter than its header': struct.pack('<IHB', 0, 3, 1) + b'\x01\x02\x03',
+        }
+        for name, damaged in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                ldb = pathlib.Path(tmp)
+                (ldb / '000003.log').write_bytes(kept + damaged)
+                (ldb / '000005.log').write_bytes(_log_entry(3, b'next', b'file'))
+                unparsed = ParseFailures('Test')
+                ldb_records = ccl_leveldb.RawLevelDb(ldb)
+                try:
+                    keys = [record.user_key for record in iterate_leveldb_records(ldb_records, unparsed)]
+                finally:
+                    ldb_records.close()
+
+                self.assertIn(b'before', keys)
+                self.assertEqual(b'next', keys[-1])
+                self.assertEqual(1, len(unparsed.sources))
+                self.assertTrue(unparsed.sources[0][0].endswith('000003.log'))
 
     def test_extension_storage_is_partial_instead_of_raising(self):
         with tempfile.TemporaryDirectory() as tmp:
