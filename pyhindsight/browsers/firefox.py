@@ -2067,6 +2067,9 @@ class Firefox(WebBrowser):
         for redirected in redirected_cache_paths(self.profile_path):
             cand = _entries_under(redirected)
             if cand:
+                # Outside both the profile and --cache, so the report needs telling
+                # how to name it (see WebBrowser.restore_display_paths).
+                self.display_path_aliases.append((cand, utils.short_path(cand)))
                 log.info(f' - Auto-detected Firefox cache at {cand}')
                 return cand
 

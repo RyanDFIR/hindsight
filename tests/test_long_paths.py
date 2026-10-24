@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -7,7 +8,8 @@ import unittest
 from pyhindsight.analysis import AnalysisSession
 from pyhindsight.artifact_filter import ArtifactFilter
 from pyhindsight.browsers.chrome import Chrome
-from pyhindsight.utils import long_path
+from pyhindsight.browsers.webbrowser import WebBrowser
+from pyhindsight.utils import long_path, short_path
 
 HISTORY_FIXTURE = os.path.join('tests', 'fixtures', 'profiles', '60', 'History')
 EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop'
@@ -127,10 +129,30 @@ class TestLongPath(unittest.TestCase):
             'C:\\Evidence\\x\\..\\Default': '\\\\?\\C:\\Evidence\\Default',
             '\\\\server\\share\\Default': '\\\\?\\UNC\\server\\share\\Default',
             '\\\\?\\C:\\Evidence\\Default': '\\\\?\\C:\\Evidence\\Default',
+            # Device paths, as for a shadow copy: not UNC paths to a server called ".".
+            '\\\\.\\C:\\Evidence\\Default': '\\\\?\\C:\\Evidence\\Default',
+            '\\\\.\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Default':
+                '\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Default',
         }
         for given, expected in cases.items():
             with self.subTest(path=given):
                 self.assertEqual(expected, long_path(given))
+
+    def test_short_path(self):
+        cases = {
+            '\\\\?\\C:\\Evidence\\Default': 'C:\\Evidence\\Default',
+            '\\\\?\\C:': 'C:',
+            '\\\\?\\UNC\\server\\share\\Default': '\\\\server\\share\\Default',
+            # No ordinary form to go back to.
+            '\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Default':
+                '\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Default',
+            '\\\\?\\Volume{0b1c6e5a-0000-0000-0000-100000000000}\\Default':
+                '\\\\?\\Volume{0b1c6e5a-0000-0000-0000-100000000000}\\Default',
+            'C:\\Evidence\\Default': 'C:\\Evidence\\Default',
+        }
+        for given, expected in cases.items():
+            with self.subTest(path=given):
+                self.assertEqual(expected, short_path(given))
 
     @unittest.skipUnless(os.name == 'nt', 'the extended-length form is Windows-only')
     def test_a_relative_path_is_made_absolute(self):
@@ -144,6 +166,77 @@ class TestLongPath(unittest.TestCase):
     def test_no_path(self):
         self.assertIsNone(long_path(None))
         self.assertEqual('', long_path(''))
+
+
+class _Browser(WebBrowser):
+    """A browser read through the extended-length form on any platform, whose
+    parse_profile() is whatever the test needs."""
+
+    def __init__(self, parse):
+        super().__init__(GIVEN, 'Test')
+        self.profile_path = LONG
+        self.parse = parse
+
+    def parse_profile(self):
+        self.parse(self)
+
+
+GIVEN = 'C:\\Evidence\\Default'
+LONG = '\\\\?\\C:\\Evidence\\Default'
+
+
+class TestDisplayPaths(unittest.TestCase):
+
+    def test_paths_nested_in_a_record_are_restored(self):
+        def parse(browser):
+            item = WebBrowser.StorageItem('local storage', LONG, 'https://example.com', 'key', 'value')
+            item.locations = {'files': [LONG + '\\IndexedDB\\a.ldb', (LONG + '\\b.log', 7)]}
+            browser.parsed_storage.append(item)
+            browser.session_structure = {'windows': [{'source': LONG + '\\Sessions\\Session_1'}]}
+
+        browser = _Browser(parse)
+        browser.process()
+        item = browser.parsed_storage[0]
+        self.assertEqual(GIVEN, item.profile)
+        self.assertEqual({'files': [GIVEN + '\\IndexedDB\\a.ldb', (GIVEN + '\\b.log', 7)]}, item.locations)
+        self.assertEqual(GIVEN + '\\Sessions\\Session_1', browser.session_structure['windows'][0]['source'])
+
+    def test_evidence_that_looks_like_a_long_path_is_untouched(self):
+        # A value read from the profile is the evidence, whatever it looks like.
+        values = ['\\\\?\\C:\\Users\\bob\\Downloads\\a.exe', LONG + 'Backup\\x', 'see ' + LONG]
+
+        def parse(browser):
+            for value in values:
+                browser.parsed_storage.append(
+                    WebBrowser.StorageItem('local storage', LONG, 'https://example.com', 'key', value))
+
+        browser = _Browser(parse)
+        browser.process()
+        self.assertEqual(values, [item.value for item in browser.parsed_storage])
+
+    def test_records_are_restored_when_parsing_fails(self):
+        def parse(browser):
+            browser.parsed_storage.append(WebBrowser.StorageItem('local storage', LONG, 'https://example.com', 'key', ''))
+            raise RuntimeError('parser failed')
+
+        browser = _Browser(parse)
+        with self.assertRaises(RuntimeError):
+            browser.process()
+        self.assertEqual(GIVEN, browser.parsed_storage[0].profile)
+
+    def test_the_log_names_paths_as_given(self):
+        records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: records.append(record.getMessage())
+        root = logging.getLogger()
+        root.addHandler(handler)
+        try:
+            _Browser(lambda browser: logging.getLogger('pyhindsight.test').warning(
+                ' - Reading from %s', LONG + '\\History')).process()
+            logging.getLogger('pyhindsight.test').warning(' - After: %s', LONG)
+        finally:
+            root.removeHandler(handler)
+        self.assertEqual([' - Reading from ' + GIVEN + '\\History', ' - After: ' + LONG], records)
 
 
 if __name__ == '__main__':

@@ -75,17 +75,28 @@ def long_path(path):
     if path.startswith('\\\\?\\'):
         return path
     path = os.path.abspath(path)
+    if path.startswith('\\\\.\\'):
+        # A device path (\\.\C:\..., or \\.\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\...
+        # for a shadow copy) only needs its prefix changed. Taken for UNC, it would name a
+        # server called ".", and nothing under it would open.
+        return '\\\\?\\' + path[4:]
     if path.startswith('\\\\'):
         return '\\\\?\\UNC\\' + path[2:]  # \\server\share\... -> \\?\UNC\server\share\...
     return '\\\\?\\' + path
 
 
 def short_path(path):
-    """The ordinary form of an extended-length path (see long_path); others unchanged."""
+    """The ordinary form of an extended-length path (see long_path); others unchanged.
+
+    Only a drive or UNC path has an ordinary form. One such as \\\\?\\GLOBALROOT\\... or
+    \\\\?\\Volume{...}\\... has none, and is left as it is.
+    """
     if isinstance(path, str):
         if path.startswith('\\\\?\\UNC\\'):
             return '\\\\' + path[8:]
-        if path.startswith('\\\\?\\'):
+        drive = path[4:5]
+        if (path.startswith('\\\\?\\') and drive.isascii() and drive.isalpha()
+                and path[5:6] == ':' and path[6:7] in ('', '\\')):
             return path[4:]
     return path
 

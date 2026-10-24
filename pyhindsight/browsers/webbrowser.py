@@ -495,6 +495,31 @@ class ProcessingDisplay:
         return text
 
 
+class _DisplayPathFilter(logging.Filter):
+    """Put a browser's paths back in the form they were given, in each record logged.
+
+    Installed by WebBrowser.process(). Unlike restore_display_paths(), this swaps a path
+    anywhere in the message: a log line is Hindsight's own text, not evidence.
+    """
+
+    def __init__(self, browser):
+        super().__init__()
+        self.browser = browser
+
+    def filter(self, record):
+        prefixes = self.browser.display_prefixes()
+        if prefixes:
+            try:
+                message = record.getMessage()
+            except Exception:
+                # A malformed record; logging reports it when the handler formats it.
+                return True
+            for long, given in prefixes:
+                message = message.replace(long, given)
+            record.msg, record.args = message, ()
+        return True
+
+
 class WebBrowser(object):
     def __init__(
             self, profile_path, browser_name, cache_path=None, version=None, display_version=None,
@@ -510,6 +535,9 @@ class WebBrowser(object):
         self.profile_path = utils.long_path(profile_path)
         self.browser_name = browser_name
         self.cache_path = utils.long_path(cache_path)
+        # (read through, shown as) for any other directory a parser finds outside both,
+        # such as a Firefox cache that Windows keeps beside the profile.
+        self.display_path_aliases = []
         self.version = version
         self.display_version = display_version
         self.timezone = timezone
@@ -545,12 +573,31 @@ class WebBrowser(object):
         for anything that drives a browser directly (a library caller as well as the
         analysis session), and runs even when parsing raises.
         """
+        # The log names paths as they were given too. Parsers log the paths they read
+        # from, so the swap is made on the way out, for every record logged meanwhile.
+        log_filter = _DisplayPathFilter(self)
+        handlers = list(logging.getLogger().handlers)
+        for handler in handlers:
+            handler.addFilter(log_filter)
         try:
-            result = self.parse_profile(*args, **kwargs)
-            self.restore_display_paths()
-            return result
+            return self.parse_profile(*args, **kwargs)
         finally:
-            self.remove_temp_dir()
+            # Records gathered before a failure are restored as well, for a library
+            # caller that keeps them.
+            try:
+                self.restore_display_paths()
+            finally:
+                for handler in handlers:
+                    handler.removeFilter(log_filter)
+                self.remove_temp_dir()
+
+    def display_prefixes(self):
+        """[(read through, shown as)] for each directory read through another form."""
+        pairs = [(self.profile_path, self.display_profile_path),
+                 (self.cache_path, self.display_cache_path), *self.display_path_aliases]
+        pairs = [(long, given) for long, given in pairs if long and given is not None and long != given]
+        # Longest first, so a cache inside the profile maps by its own entry.
+        return sorted(pairs, key=lambda pair: len(pair[0]), reverse=True)
 
     def restore_display_paths(self):
         """Report every path in the form it was given, not the form it was read through.
@@ -559,30 +606,55 @@ class WebBrowser(object):
         Windows, and records carry them: the profile, and the absolute source path of
         many a record. That form is how the files were opened, not what the examiner
         pointed Hindsight at, so it is swapped back here, once, rather than at each of the
-        hundred-odd places a record is built. A path under neither (Firefox's cache,
-        which lives beside the profile) just loses the \\\\?\\ prefix.
+        hundred-odd places a record is built.
+
+        Only a string that starts with one of display_prefixes() changes. A value read
+        from the evidence that merely starts with \\\\?\\ is the evidence, and stays as it
+        is. Lists, dicts, tuples and Hindsight's own objects are searched at any depth, so
+        a parser that nests a path in a record is covered without having to know.
+
+        Known risk: a value from the evidence that starts with one of those directories
+        in its long form is changed too. That takes a profile analyzed in place whose
+        browser recorded its own path as \\\\?\\..., so it is unlikely, but it is a change
+        to evidence. Restoring only the fields that hold paths Hindsight built (profile,
+        source_path, source_item, ...) would rule it out. That was considered and not done
+        for now: every parser that adds a path field would have to remember to list it,
+        and one that forgot would put the long form in the report.
         """
-        prefixes = [(long, given) for long, given in (
-            (self.profile_path, self.display_profile_path),
-            (self.cache_path, self.display_cache_path)) if long and long != given]
+        prefixes = self.display_prefixes()
         if not prefixes:
             return
+        seen = set()
 
-        def restored(path):
-            for long, given in prefixes:
-                if path.startswith(long) and path[len(long):len(long) + 1] in ('', '\\', '/'):
-                    return given + path[len(long):]
-            return utils.short_path(path)
+        def restored(value):
+            if isinstance(value, str):
+                for long, given in prefixes:
+                    if value.startswith(long) and value[len(long):len(long) + 1] in ('', '\\', '/'):
+                        return given + value[len(long):]
+                return value
+            if id(value) in seen:
+                return value
+            if isinstance(value, list):
+                seen.add(id(value))
+                value[:] = [restored(item) for item in value]
+            elif isinstance(value, dict):
+                seen.add(id(value))
+                for key, item in value.items():
+                    value[key] = restored(item)
+            elif isinstance(value, tuple):
+                items = [restored(item) for item in value]
+                if any(new is not old for new, old in zip(items, value)):
+                    return type(value)._make(items) if hasattr(value, '_make') else tuple(items)
+            elif (type(value).__module__.startswith('pyhindsight.')
+                    and not isinstance(value, WebBrowser) and hasattr(value, '__dict__')):
+                seen.add(id(value))
+                fields = vars(value)
+                for key, item in fields.items():
+                    fields[key] = restored(item)
+            return value
 
         for name in RESULT_COLLECTIONS:
-            collection = getattr(self, name, None)
-            if isinstance(collection, dict):
-                collection = collection.get('data')
-            for record in collection or []:
-                fields = record if isinstance(record, dict) else getattr(record, '__dict__', None)
-                for key, value in (fields or {}).items():
-                    if isinstance(value, str) and value.startswith('\\\\?\\'):
-                        fields[key] = restored(value)
+            restored(getattr(self, name, None))
 
     def parse_profile(self, *args, **kwargs):
         raise NotImplementedError
