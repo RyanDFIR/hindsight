@@ -123,11 +123,9 @@ class Chrome(WebBrowser):
         WebBrowser.__init__(
             self, profile_path, browser_name=browser_name, cache_path=cache_path, version=version, timezone=timezone,
             no_copy=no_copy, temp_dir=temp_dir, artifact_filter=artifact_filter)
-        self.profile_path = profile_path
         # Honor a variant passed by the caller (e.g. "Edge", "Brave", "Vivaldi");
         # all Chromium variants currently share this parser and differ only in variant.
         self.browser_name = browser_name or "Chrome"
-        self.cache_path = cache_path
         self.timezone = timezone
         self.installed_extensions = {}
         # Per-extension records keyed by ext_id, merged from the on-disk Extensions/
@@ -519,7 +517,7 @@ class Chrome(WebBrowser):
                             visits.id as visit_id
                         FROM urls, visits WHERE urls.id = visits.url'''}
 
-        source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'History items') as cursor:
             if cursor is None:
                 return None
@@ -599,7 +597,7 @@ class Chrome(WebBrowser):
                         FROM playback LEFT JOIN playbackSession 
                             ON playback.last_updated_time_s = playbackSession.last_updated_time_s'''}
 
-        source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'Media History items') as cursor:
             if cursor is None:
                 return None
@@ -730,7 +728,7 @@ class Chrome(WebBrowser):
                         downloads.state, downloads.full_path, downloads.start_time
                     FROM downloads'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'Download items') as cursor:
             if cursor is None:
@@ -830,7 +828,7 @@ class Chrome(WebBrowser):
         ldb_path = os.path.join(path, dir_name)
         log.info('Downloads (shared_proto_db):')
         log.info(f' - Reading from {ldb_path}')
-        source_item = os.path.relpath(ldb_path, self.profile_path)
+        source_item = utils.relpath(ldb_path, self.profile_path)
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
@@ -1042,7 +1040,7 @@ class Chrome(WebBrowser):
                             cookies.last_access_utc, cookies.expires_utc, cookies.secure, cookies.httponly
                         FROM cookies'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Cookie items') as cursor:
             if cursor is None:
                 return None
@@ -1116,7 +1114,7 @@ class Chrome(WebBrowser):
                  6:  '''SELECT origin_url, action_url, username_element, username_value, password_element,
                             password_value, date_created, blacklisted_by_user FROM logins'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Login items') as cursor:
             if cursor is None:
                 return None
@@ -1220,7 +1218,7 @@ class Chrome(WebBrowser):
                  2: '''SELECT autofill_dates.date_created, autofill.name, autofill.value, autofill.count
                         FROM autofill, autofill_dates WHERE autofill.pair_id = autofill_dates.pair_id'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'Autofill items') as cursor:
             if cursor is None:
@@ -1279,7 +1277,7 @@ class Chrome(WebBrowser):
                    'last_user_interaction_time', 'first_web_authn_assertion_time',
                    'last_web_authn_assertion_time']
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'DIPS items') as cursor:
             if cursor is None:
@@ -1310,7 +1308,7 @@ class Chrome(WebBrowser):
         query = {117: '''SELECT opener_site, popup_site, last_popup_time FROM popups''',
                  133: '''SELECT opener_site, popup_site, last_popup_time, is_authentication_interaction FROM popups'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
 
         with self._execute_compatible_query(
                 path, database, query, version, 'DIPS Popup items') as cursor:
@@ -1337,7 +1335,7 @@ class Chrome(WebBrowser):
     def get_bookmarks(self, path, file, version):
         # Set up empty return array
         results = []
-        source_item = os.path.relpath(os.path.join(path, file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, file), self.profile_path)
 
         log.info(f'Bookmark items from {file}:')
 
@@ -1712,7 +1710,7 @@ class Chrome(WebBrowser):
                 continue
 
             file_path = os.path.join(sessions_path, filename)
-            source_item = os.path.relpath(file_path, self.profile_path)
+            source_item = utils.relpath(file_path, self.profile_path)
 
             # Pass 1: Use CCL to parse NavigationEntry commands
             try:
@@ -2427,7 +2425,7 @@ class Chrome(WebBrowser):
 
         log.info('Extension Settings (Secure Preferences):')
         pref_path = os.path.join(path, preferences_file)
-        source_item = os.path.relpath(pref_path, self.profile_path)
+        source_item = utils.relpath(pref_path, self.profile_path)
         try:
             log.info(f' - Reading from {pref_path}')
             with open(pref_path, encoding='utf-8', errors='replace') as f:
@@ -2763,7 +2761,7 @@ class Chrome(WebBrowser):
 
         # Open 'Preferences' file
         pref_path = os.path.join(path, preferences_file)
-        source_item = os.path.relpath(pref_path, self.profile_path)
+        source_item = utils.relpath(pref_path, self.profile_path)
         try:
             log.info(f' - Reading from {pref_path}')
             with open(pref_path, encoding='utf-8', errors='replace') as f:
@@ -3221,7 +3219,7 @@ class Chrome(WebBrowser):
         log.info('Platform Notifications:')
         pn_root_path = os.path.join(path, dir_name)
         log.info(f' - Reading from {pn_root_path}')
-        source_item = os.path.relpath(pn_root_path, self.profile_path)
+        source_item = utils.relpath(pn_root_path, self.profile_path)
 
         try:
             with NotificationReader(pathlib.Path(pn_root_path)) as reader:
@@ -3862,7 +3860,7 @@ class Chrome(WebBrowser):
                                 # decompresses; all hold readable content.
                                 tl_item.body_sha256 = body_sha
                                 tl_item.last_modified = last_mod_val
-                                tl_item.source_item = os.path.relpath(
+                                tl_item.source_item = utils.relpath(
                                     scf_path, self.profile_path)
                                 self.parsed_artifacts.append(tl_item)
                     finally:
@@ -3896,7 +3894,7 @@ class Chrome(WebBrowser):
             return 0
 
         cache_items = profile.iterate_cache(url=None, omit_cached_data=False)
-        source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
         phantom_locations = 0
@@ -4722,7 +4720,7 @@ class Chrome(WebBrowser):
         sc_root_listing = os.listdir(sc_root_path)
         log.debug(f' - {len(sc_root_listing)} files in Site Characteristics directory: {str(sc_root_listing)}')
 
-        source_item = os.path.relpath(sc_root_path, self.profile_path)
+        source_item = utils.relpath(sc_root_path, self.profile_path)
 
         items = utils.get_ldb_records(sc_root_path)
         for item in items:
@@ -4976,7 +4974,7 @@ class Chrome(WebBrowser):
         #    trivially reveal a user's browsing history to an attacker reading the
         #    serialized state on disk.
 
-        source_item = os.path.relpath(ts_file_path, self.profile_path)
+        source_item = utils.relpath(ts_file_path, self.profile_path)
 
         with open(ts_file_path, encoding='utf-8', errors='replace') as f:
             ts_json = json.loads(f.read())

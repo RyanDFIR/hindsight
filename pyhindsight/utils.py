@@ -62,6 +62,58 @@ def sha256_file(file_path, chunk_size=1024 * 1024):
     return digest.hexdigest()
 
 
+def long_path(path):
+    """`path` in the form Windows will open past MAX_PATH; unchanged elsewhere.
+
+    Unless long paths are enabled machine-wide (they are off by default), Windows
+    refuses any path of 260 characters or more, and a browser profile reaches that
+    easily: Service Worker CacheStorage files sit five directories below the profile,
+    so evidence kept at an ordinary depth is enough. The extended-length form,
+    \\\\?\\C:\\..., is exempt. It has to be absolute and use backslashes, which
+    abspath() provides; Windows does no further normalization on it.
+    """
+    if os.name != 'nt' or not path:
+        return path
+    path = os.fspath(path)
+    if path.startswith('\\\\?\\'):
+        return path
+    path = os.path.abspath(path)
+    if path.startswith('\\\\.\\'):
+        # A device path (\\.\C:\..., or \\.\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\...
+        # for a shadow copy) only needs its prefix changed. Taken for UNC, it would name a
+        # server called ".", and nothing under it would open.
+        return '\\\\?\\' + path[4:]
+    if path.startswith('\\\\'):
+        return '\\\\?\\UNC\\' + path[2:]  # \\server\share\... -> \\?\UNC\server\share\...
+    return '\\\\?\\' + path
+
+
+def short_path(path):
+    """The ordinary form of an extended-length path (see long_path); others unchanged.
+
+    Only a drive or UNC path has an ordinary form. One such as \\\\?\\GLOBALROOT\\... or
+    \\\\?\\Volume{...}\\... has none, and is left as it is.
+    """
+    if isinstance(path, str):
+        if path.startswith('\\\\?\\UNC\\'):
+            return '\\\\' + path[8:]
+        drive = path[4:5]
+        if (path.startswith('\\\\?\\') and drive.isascii() and drive.isalpha()
+                and path[5:6] == ':' and path[6:7] in ('', '\\')):
+            return path[4:]
+    return path
+
+
+def relpath(path, start):
+    """os.path.relpath() for two paths that may differ in being extended-length.
+
+    Windows treats \\\\?\\C: and C: as different drives, so relpath() raises when only
+    one of the two went through long_path(), as when a caller hands a parser its own
+    path rather than the browser's.
+    """
+    return os.path.relpath(long_path(path), long_path(start))
+
+
 def note_open_failure(browser, database_path, database_name, reason):
     """Remember why a database could not be opened, for the caller to report.
 
@@ -72,7 +124,7 @@ def note_open_failure(browser, database_path, database_name, reason):
     """
     try:
         browser.last_open_failure = (
-            os.path.join(database_path, database_name), str(reason))
+            short_path(os.path.join(database_path, database_name)), str(reason))
     except AttributeError:
         pass
 
