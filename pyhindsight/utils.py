@@ -1,12 +1,15 @@
 import datetime
+import functools
 import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import struct
 import sys
+import zoneinfo
 from pyhindsight import __version__
 
 log = logging.getLogger(__name__)
@@ -59,6 +62,58 @@ def sha256_file(file_path, chunk_size=1024 * 1024):
     return digest.hexdigest()
 
 
+def long_path(path):
+    """`path` in the form Windows will open past MAX_PATH; unchanged elsewhere.
+
+    Unless long paths are enabled machine-wide (they are off by default), Windows
+    refuses any path of 260 characters or more, and a browser profile reaches that
+    easily: Service Worker CacheStorage files sit five directories below the profile,
+    so evidence kept at an ordinary depth is enough. The extended-length form,
+    \\\\?\\C:\\..., is exempt. It has to be absolute and use backslashes, which
+    abspath() provides; Windows does no further normalization on it.
+    """
+    if os.name != 'nt' or not path:
+        return path
+    path = os.fspath(path)
+    if path.startswith('\\\\?\\'):
+        return path
+    path = os.path.abspath(path)
+    if path.startswith('\\\\.\\'):
+        # A device path (\\.\C:\..., or \\.\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\...
+        # for a shadow copy) only needs its prefix changed. Taken for UNC, it would name a
+        # server called ".", and nothing under it would open.
+        return '\\\\?\\' + path[4:]
+    if path.startswith('\\\\'):
+        return '\\\\?\\UNC\\' + path[2:]  # \\server\share\... -> \\?\UNC\server\share\...
+    return '\\\\?\\' + path
+
+
+def short_path(path):
+    """The ordinary form of an extended-length path (see long_path); others unchanged.
+
+    Only a drive or UNC path has an ordinary form. One such as \\\\?\\GLOBALROOT\\... or
+    \\\\?\\Volume{...}\\... has none, and is left as it is.
+    """
+    if isinstance(path, str):
+        if path.startswith('\\\\?\\UNC\\'):
+            return '\\\\' + path[8:]
+        drive = path[4:5]
+        if (path.startswith('\\\\?\\') and drive.isascii() and drive.isalpha()
+                and path[5:6] == ':' and path[6:7] in ('', '\\')):
+            return path[4:]
+    return path
+
+
+def relpath(path, start):
+    """os.path.relpath() for two paths that may differ in being extended-length.
+
+    Windows treats \\\\?\\C: and C: as different drives, so relpath() raises when only
+    one of the two went through long_path(), as when a caller hands a parser its own
+    path rather than the browser's.
+    """
+    return os.path.relpath(long_path(path), long_path(start))
+
+
 def note_open_failure(browser, database_path, database_name, reason):
     """Remember why a database could not be opened, for the caller to report.
 
@@ -69,7 +124,7 @@ def note_open_failure(browser, database_path, database_name, reason):
     """
     try:
         browser.last_open_failure = (
-            os.path.join(database_path, database_name), str(reason))
+            short_path(os.path.join(database_path, database_name)), str(reason))
     except AttributeError:
         pass
 
@@ -338,6 +393,52 @@ def decode_page_transition(raw):
             result += qualifiers_friendly[qualifier] + '; '
 
     return result
+
+
+@functools.lru_cache(maxsize=None)
+def _zone_names():
+    """Map each IANA zone name, lowercased, to its proper spelling."""
+    return {name.lower(): name for name in zoneinfo.available_timezones()}
+
+
+def parse_timezone(value):
+    """Return the tzinfo a timezone setting names, or None if it names none.
+
+    Accepts an IANA name ("Asia/Kolkata", "America/New_York", "UTC") or a fixed offset
+    from UTC ("UTC+5:30", "UTC+05:30", "+0530", "GMT-3"). IANA has fixed-offset zones
+    only for whole hours (Etc/GMT-5, and nothing for +5:30), so without the second form
+    the only way to ask for a half- or quarter-hour offset was to know a city in it.
+
+    The sign means what it says: "GMT-3" is three hours behind UTC. IANA's Etc zones
+    invert it ("Etc/GMT-3" is three hours ahead), and that form still goes to zoneinfo
+    and keeps its IANA meaning.
+    """
+    if isinstance(value, datetime.tzinfo):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    match = re.fullmatch(r'(?:UTC|GMT)?([+-])(\d{1,2})(?::?(\d{2}))?',
+                         value.replace(' ', ''), re.IGNORECASE)
+    if match:
+        sign, hours, minutes = match.groups()
+        offset = datetime.timedelta(hours=int(hours), minutes=int(minutes or 0))
+        # Offsets in use run from -12:00 to +14:00. Accept up to 14 hours either way;
+        # anything past that is a typo.
+        if int(minutes or 0) > 59 or offset > datetime.timedelta(hours=14):
+            return None
+        return datetime.timezone(-offset if sign == '-' else offset)
+
+    # Names are matched without regard to case. Otherwise "asia/kolkata" works only on a
+    # case-insensitive filesystem, and when it does the header says "asia/kolkata".
+    name = value.strip()
+    name = _zone_names().get(name.lower(), name)
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        # OSError: on Windows, a name with a character no path can hold (a tab, say)
+        # fails in the file lookup rather than as "not found".
+        return None
 
 
 def friendly_date(timestamp):
