@@ -31,8 +31,8 @@ contradicts is discarded rather than reported, and the formats whose shape alone
 not identify them (ASP.NET Core, a bare Unix timestamp) are only reported when
 Last-Modified confirms them.
 
-The forensic method this supports -- tying a download to a later re-acquisition of
-the same file when the original is gone -- is described in
+The forensic method this supports, tying a download to a later re-acquisition of
+the same file when the original is gone, is described in
 https://thelocalh0st.com/posts/etag-download-forensics/
 """
 
@@ -413,6 +413,13 @@ def analyze(etag, last_modified=None, size=None, reference_time=None,
     best_score, best = scored[0]
     result = ETagAnalysis(best.format, weak=weak, modified=best.modified, size=best.size,
                           notes=weak_note + best.notes)
+
+    # Without anything to check against, the format was chosen on the shape alone, and
+    # a quarter of random "8 hex digits - hex digits" values read as nginx.
+    time_checked = best.modified is not None and ctx.header_time is not None
+    size_checked = best.size is not None and (ctx.size or ctx.encoded_size) is not None
+    if (best.modified is not None or best.size is not None) and not (time_checked or size_checked):
+        result.notes.append('not confirmed: no Last-Modified or size recorded to check against')
 
     if best.modified is not None and ctx.header_time is not None:
         if _same_second(best.modified, ctx.header_time):

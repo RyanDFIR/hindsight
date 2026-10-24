@@ -1503,7 +1503,23 @@ class AnalysisSession(object):
                 # A server sending a precompressed file builds its ETag from that file,
                 # so the decoded size can match the compressed Content-Length instead.
                 metadata = getattr(item, 'metadata', None)
-                if body and metadata is not None:
+                content_range = None
+                if metadata is not None:
+                    try:
+                        content_range = (metadata.get_attribute('content-range') or [None])[0]
+                    except (AttributeError, TypeError):
+                        pass
+                if content_range:
+                    # A range response (206) holds only part of the file, so its length
+                    # and hash say nothing about the ETag. The total after the slash,
+                    # when the server gave one rather than '*', is the file's size.
+                    body = None
+                    size_label = 'the Content-Range total'
+                    try:
+                        size = int(content_range.rpartition('/')[2])
+                    except (TypeError, ValueError):
+                        size = None
+                elif body and metadata is not None:
                     try:
                         content_encoding = (metadata.get_attribute('content-encoding') or [None])[0]
                         encoded_size = int((metadata.get_attribute('content-length') or [0])[0])
@@ -1863,9 +1879,10 @@ class AnalysisSession(object):
         def write_etag_analysis(row, item, value_format):
             # One readable cell here; SQLite and JSONL keep the parts as separate fields
             # for querying. Set by apply_etag_analysis, so absent on items that never
-            # went through a run.
+            # went through a run. An unrecognized ETag says nothing beyond the ETag
+            # column beside it, so its cell is left empty here.
             etag_format = getattr(item, 'etag_format', None)
-            if not etag_format:
+            if not etag_format or etag_format == 'Unrecognized':
                 return
             parts = [etag_format]
             if getattr(item, 'etag_modified', None) is not None:

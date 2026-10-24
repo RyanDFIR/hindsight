@@ -205,6 +205,16 @@ class TestDecoding(unittest.TestCase):
         result = etag.analyze('"6ac46e19-13e7f8"', reference_time=utc(2020, 1, 1))
         self.assertEqual('Unrecognized', result.format)
 
+    def test_a_decode_with_nothing_to_check_it_against_says_so(self):
+        unchecked = etag.analyze('"6ac46e19-13e7f8"', reference_time=FETCHED)
+        self.assertEqual('nginx', unchecked.format)
+        self.assertIn('not confirmed: no Last-Modified or size recorded to check against',
+                      unchecked.notes)
+        for checked in (etag.analyze('"6ac46e19-13e7f8"', 'Tue, 06 Oct 2026 03:42:17 GMT'),
+                        etag.analyze('"6ac46e19-13e7f8"', size=1304568)):
+            with self.subTest(notes=checked.notes):
+                self.assertFalse(any(note.startswith('not confirmed') for note in checked.notes))
+
     def test_iis_without_last_modified_lists_the_possibilities(self):
         # Without Last-Modified the unpadded bytes split several ways. The ETag is still
         # identifiably IIS; the time is not, and saying so beats picking one.
@@ -324,6 +334,33 @@ class TestSessionAnalysis(unittest.TestCase):
         _session([item]).apply_etag_analysis()
         self.assertIn('matches the MD5 of the cached body', item.etag_notes)
 
+    def test_a_range_response_is_checked_against_the_full_size(self):
+        # A 206 holds a slice of the file, so the slice's length and hash are not the
+        # file's. Content-Range carries the full size after the slash.
+        class Metadata:
+            def __init__(self, headers):
+                self.headers = headers
+
+            def get_attribute(self, name):
+                return [self.headers[name]] if name in self.headers else []
+
+        part = b'x' * 100
+        for content_range, size, note in (
+                ('bytes 0-99/1304568', 1304568, 'size matches the Content-Range total'),
+                ('bytes 0-99/*', None, 'not confirmed')):
+            with self.subTest(content_range=content_range):
+                item = WebBrowser.CacheItem(
+                    'Default', 'https://example.test/a', None, FETCHED, 'locations', 'key',
+                    Metadata({'content-range': content_range, 'content-length': '100'}), part)
+                item.row_type = 'cache'
+                item.etag = '"6ac46e19-13e7f8"'
+                item.body_sha256 = hashlib.sha256(part).hexdigest()
+                _session([item]).apply_etag_analysis()
+                self.assertEqual('nginx', item.etag_format)
+                self.assertEqual(1304568, item.etag_size)
+                self.assertIn(note, item.etag_notes)
+                self.assertNotIn('size differs', item.etag_notes)
+
     def test_items_without_an_etag_are_left_alone(self):
         item = _download(etag=None)
         _session([item]).apply_etag_analysis()
@@ -385,6 +422,19 @@ class TestOutputs(unittest.TestCase):
     def test_xlsx_leaves_the_cell_empty_without_an_etag(self):
         self.session.parsed_artifacts = [_download(etag=None)]
         self.session.apply_etag_analysis()
+        buffer = io.BytesIO()
+        self.session.generate_excel(buffer)
+        buffer.seek(0)
+        sheet = openpyxl.load_workbook(buffer)['Timeline']
+        row = {header.value: value.value for header, value in zip(sheet[2], sheet[3])}
+        self.assertIsNone(row['ETag Decoded (Asia/Kolkata)'])
+
+    def test_xlsx_leaves_the_cell_empty_for_an_unrecognized_etag(self):
+        # SQLite and JSONL still say 'Unrecognized'; the XLSX cell would only repeat
+        # the ETag column beside it.
+        self.session.parsed_artifacts = [_download(etag='"6e71e56-e4d464d1"')]
+        self.session.apply_etag_analysis()
+        self.assertEqual('Unrecognized', self.session.parsed_artifacts[0].etag_format)
         buffer = io.BytesIO()
         self.session.generate_excel(buffer)
         buffer.seek(0)
