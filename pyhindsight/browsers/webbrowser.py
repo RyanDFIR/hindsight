@@ -306,11 +306,39 @@ class ProcessingDisplay:
 
         sizes_before = self.browser.collection_sizes()
         self.browser.last_open_failure = None
-        returned = func(*args, **kwargs)
+        parser_error = None
+        try:
+            returned = func(*args, **kwargs)
+        except Exception as e:
+            # A parser that raises must not cost the analyst the report for every other
+            # artifact, as a damaged LevelDB log did in issue #374. The traceback goes to
+            # the log for whoever fixes the parser. The corpus baselines record each
+            # artifact's status, so a parser that starts raising still fails those tests.
+            log.exception(f' - {display_label}: the parser raised an error')
+            reason = f'{type(e).__name__}: {e}' if str(e) else type(e).__name__
+            parser_error = f'parser error ({reason})'
+            returned = None
         sizes_after = self.browser.collection_sizes()
         open_failure = self.browser.last_open_failure
 
-        if returned is None:
+        delivered = sum(max(0, sizes_after.get(name, 0) - sizes_before.get(name, 0))
+                        for name in sizes_after)
+        if parser_error and delivered:
+            # Records the parser delivered before it raised are real and stay in the
+            # output. What it never reached is unknown, which is what an unparsed
+            # source means.
+            log.warning(f' - Unparsed source in {count_key}: {parser_error}')
+            result = self.browser.record_artifact(
+                count_key, label=display_label, count=delivered, unparsed_sources=1,
+                status=ARTIFACT_STATUS_PARTIAL, detail=parser_error)
+            cell = delivered
+        elif parser_error:
+            result = self.browser.record_artifact(
+                count_key, label=display_label, status=ARTIFACT_STATUS_FAILED,
+                detail=parser_error)
+            cell = 'Failed'
+            log.warning(f' - {display_label}: could not be read; {parser_error}')
+        elif returned is None:
             # The parser could not read its artifact. Recorded as a status, never as a
             # count of 0, so "could not read this" stays distinguishable from "read it
             # and found nothing".
