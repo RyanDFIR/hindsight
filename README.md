@@ -44,7 +44,7 @@ Command Line Options:
 | -l or --log	 | Location Hindsight should log to (will append if exists) |
 | --log-level | How much detail to write to the log: debug, info (the default), warning or error. Use debug when reporting a bug |
 | -h or --help   | Shows these options and the default Chrome data locations |
-| -t or --timezone | Display timezone for the timestamps in XLSX output |
+| -t or --timezone | Display timezone for the timestamps in the output (all formats): an IANA name such as `Asia/Kolkata` or `America/New_York`, or an offset from UTC such as `UTC+05:30` |
 | --only or --artifacts | Only parse these artifacts (comma-separated; repeatable) |
 | --skip or --exclude | Parse everything except these artifacts (comma-separated; repeatable) |
 | --list-artifacts | Print the artifact names accepted by `--only` and `--skip`, then exit |

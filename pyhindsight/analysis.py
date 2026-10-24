@@ -10,7 +10,6 @@ import sys
 import time
 import xlsxwriter
 import xlsxwriter.worksheet
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pyhindsight import __version__
 from pyhindsight.artifact_filter import ArtifactFilter
@@ -20,7 +19,7 @@ from pyhindsight.browsers.firefox import Firefox
 from pyhindsight.browsers.webbrowser import (
     ARTIFACT_STATUS_FAILED, ARTIFACT_STATUS_SKIPPED, WebBrowser, spinner_name,
     timeline_sort_key)
-from pyhindsight.utils import friendly_date
+from pyhindsight.utils import friendly_date, parse_timezone
 import pyhindsight.plugins
 import rich.align
 import rich.console
@@ -1317,11 +1316,11 @@ class AnalysisSession(object):
 
         # If the timezone exists as a string, convert it to a tzinfo object
         if self.timezone is not None and isinstance(self.timezone, str):
-            try:
-                self.timezone = ZoneInfo(self.timezone)
-            except ZoneInfoNotFoundError:
+            timezone = parse_timezone(self.timezone)
+            if timezone is None:
                 log.warning("Couldn't understand timezone; using UTC.")
-                self.timezone = datetime.timezone.utc
+                timezone = datetime.timezone.utc
+            self.timezone = timezone
         elif self.timezone is None:
             self.timezone = datetime.timezone.utc
 

@@ -22,7 +22,7 @@ import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
 from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
 from pyhindsight.logging_setup import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging
-from pyhindsight.utils import get_rich_banner, make_stdout_resilient
+from pyhindsight.utils import get_rich_banner, make_stdout_resilient, parse_timezone
 
 import rich.align
 import rich.console
@@ -31,14 +31,26 @@ import rich.spinner
 import rich.table
 import rich.text
 
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
 
 def get_base_dir():
     """Get base directory for resolving relative paths (exe dir for frozen apps)."""
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.realpath(__file__))
+
+
+def timezone_argument(value):
+    """argparse type for -t: refuse a timezone that can't be understood.
+
+    Falling back to UTC instead would put every timestamp in the report at the wrong
+    hour, with only a line in the console to say so.
+    """
+    timezone = parse_timezone(value)
+    if timezone is None:
+        raise argparse.ArgumentTypeError(
+            f'can\'t understand timezone "{value}"; use an IANA name such as "Asia/Kolkata" '
+            f'or an offset from UTC such as "UTC+05:30"')
+    return timezone
 
 
 def parse_arguments(analysis_session):
@@ -93,7 +105,9 @@ The Chrome Profile folder default locations are:
                              'per-record detail those totals are made of and the per-directory file '
                              "listings. Only Hindsight's own loggers are set; dependencies stay at "
                              "warning either way.")
-    parser.add_argument('-t', '--timezone', help='Display timezone for the timestamps in XLSX output', default='UTC')
+    parser.add_argument('-t', '--timezone', default='UTC', type=timezone_argument,
+                        help='Display timezone for the timestamps in the output (all formats): an IANA name such as '
+                             '"Asia/Kolkata" or "America/New_York", or an offset from UTC such as "UTC+05:30"')
     parser.add_argument('-d', '--decrypt', choices=['mac', 'linux'], default=None,
                         help='Try to decrypt Chrome data from a Linux or Mac system; support for both is currently '
                              'buggy and enabling this may cause problems. Only use "--decrypt linux" on data from a '
@@ -139,13 +153,6 @@ The Chrome Profile folder default locations are:
         args.log = os.path.join(base_dir, args.log)
     if not os.path.isabs(args.temp_dir):
         args.temp_dir = os.path.join(base_dir, args.temp_dir)
-
-    if args.timezone:
-        try:
-            args.timezone = ZoneInfo(args.timezone)
-        except ZoneInfoNotFoundError:
-            print("Couldn't understand timezone; using UTC.")
-            args.timezone = datetime.timezone.utc
 
     # Disable decryption on Linux unless explicitly enabled and supported
     if args.decrypt == 'linux' and analysis_session.available_decrypts['linux'] == 1:
