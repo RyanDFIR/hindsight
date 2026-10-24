@@ -349,6 +349,10 @@ def parse_timezone(value):
     from UTC ("UTC+5:30", "UTC+05:30", "+0530", "GMT-3"). IANA has fixed-offset zones
     only for whole hours (Etc/GMT-5, and nothing for +5:30), so without the second form
     the only way to ask for a half- or quarter-hour offset was to know a city in it.
+
+    The sign means what it says: "GMT-3" is three hours behind UTC. IANA's Etc zones
+    invert it ("Etc/GMT-3" is three hours ahead), and that form still goes to zoneinfo
+    and keeps its IANA meaning.
     """
     if isinstance(value, datetime.tzinfo):
         return value
@@ -360,7 +364,8 @@ def parse_timezone(value):
     if match:
         sign, hours, minutes = match.groups()
         offset = datetime.timedelta(hours=int(hours), minutes=int(minutes or 0))
-        # Offsets in use run from -12:00 to +14:00; anything past that is a typo.
+        # Offsets in use run from -12:00 to +14:00. Accept up to 14 hours either way;
+        # anything past that is a typo.
         if int(minutes or 0) > 59 or offset > datetime.timedelta(hours=14):
             return None
         return datetime.timezone(-offset if sign == '-' else offset)
