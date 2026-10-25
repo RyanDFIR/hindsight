@@ -70,6 +70,16 @@ SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
 
 
+def _describe_exception(e):
+    """Name an exception for a failure reason, including its type.
+
+    `str(e)` alone is blank for a bare `raise NotImplementedError()`, which turns a
+    reason into `unexpected exception ()`.
+    """
+    message = str(e)
+    return f'{type(e).__name__}: {message}' if message else type(e).__name__
+
+
 def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
 
@@ -2152,6 +2162,11 @@ class Chrome(WebBrowser):
                     database = origin_idb[database_id.dbid_no]
                     for obj_store_name in database.object_store_names:
                         obj_store = database.get_object_store_by_name(obj_store_name)
+                        # Records this object store yielded, kept or not. `results` spans
+                        # every store read so far, so it cannot say how far this one got.
+                        # A record is counted once it is dealt with, so one whose own
+                        # handling raises is not counted as read before the failure.
+                        obj_store_records = 0
                         try:
                             for record in obj_store.iterate_records():
                                 # Past the cap a record is counted, not kept. Reading on to
@@ -2159,6 +2174,7 @@ class Chrome(WebBrowser):
                                 # how many were left out.
                                 if store_budget is not None and store_records >= store_budget:
                                     store_records_over_cap += 1
+                                    obj_store_records += 1
                                     continue
                                 store_records += 1
 
@@ -2191,6 +2207,7 @@ class Chrome(WebBrowser):
                                     object_store=obj_store_name, key_type=key_type,
                                     key_raw=raw_key.hex() if isinstance(raw_key, (bytes, bytearray)) else None,
                                     value_obj=record_value))
+                                obj_store_records += 1
                         except FileNotFoundError as e:
                             unparsed.source(database, f'file not found ({e})')
 
@@ -2203,14 +2220,15 @@ class Chrome(WebBrowser):
                             # no way to tell which data is missing from the output.
                             unparsed.source(
                                 f'{database}.{obj_store_name}',
-                                f'unexpected exception ({e}); {len(results)} records '
-                                f'parsed before the failure')
+                                f'unexpected exception ({_describe_exception(e)}); '
+                                f'{obj_store_records} records read from this object store '
+                                f'before the failure')
             except ValueError as e:
                 unparsed.source(storage_directory, str(e))
                 continue
 
             except Exception as e:
-                unparsed.source(storage_directory, f'unexpected exception ({e})')
+                unparsed.source(storage_directory, f'unexpected exception ({_describe_exception(e)})')
                 continue
 
             finally:
