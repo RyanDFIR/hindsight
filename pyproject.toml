@@ -8,11 +8,13 @@ name = "pyhindsight"
 description = "Browser forensics for Google Chrome/Chromium"
 readme = "README.md"
 requires-python = ">=3.11"
-# The MIT part is ccl_chromium_reader and ccl_simplesnappy, bundled under pyhindsight/lib
-# with their LICENSE files beside them. Those files are not listed in license-files:
-# setuptools then warns on every build that the two packages "would be ignored", though
-# the wheel is the same either way.
-license = "Apache-2.0 AND MIT"
+# The BSD part is the Chromium .proto files under pyhindsight/lib/components and
+# pyhindsight/lib/content and the modules generated from them under pyhindsight/lib/proto.
+# The MIT part is ccl_chromium_reader and ccl_simplesnappy, bundled under pyhindsight/lib.
+# Each has its LICENSE beside it. Those files are not listed in license-files: setuptools
+# then warns on every build that the packages "would be ignored", though the wheel is the
+# same either way.
+license = "Apache-2.0 AND BSD-3-Clause AND MIT"
 license-files = ["LICENSE.md"]
 authors = [{name = "Ryan Benson", email = "ryan@hindsig.ht"}]
 keywords = ["chrome", "forensics", "dfir", "google-chrome", "chromium"]
