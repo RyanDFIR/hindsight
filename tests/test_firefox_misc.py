@@ -86,6 +86,22 @@ class TestFirefoxExtensions(unittest.TestCase):
         self.assertEqual(ext.version, '1.55.0')
         self.assertIn('"signedState": "Signed"', ext.manifest)
 
+    def test_fills_the_fields_the_extensions_worksheet_shows(self):
+        ff = _make_firefox()
+        ff.get_extensions(FIXTURE_DIR, 'extensions.json')
+
+        # No 'presentation', or the generic promotion would give it a sheet of its own.
+        self.assertEqual(['data'], list(ff.installed_extensions))
+        ext = ff.installed_extensions['data'][0]
+        self.assertEqual(datetime.datetime(2024, 1, 15, 12, 0, tzinfo=datetime.timezone.utc),
+                         ext.install_time)
+        self.assertEqual(datetime.datetime(2024, 1, 22, 12, 0, tzinfo=datetime.timezone.utc),
+                         ext.update_time)
+        self.assertEqual('app-profile', ext.location)
+        self.assertEqual('Enabled', ext.state)
+        self.assertEqual('Signed', ext.signed_state)
+        self.assertEqual('extensions.json', ext.source)
+
 
 if __name__ == '__main__':
     unittest.main()

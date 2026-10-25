@@ -1329,10 +1329,9 @@ class AnalysisSession(object):
         Collections are folded by attribute name rather than by branching on the
         browser, so a collection one browser doesn't produce is simply skipped.
 
-        Chrome's installed_extensions is promoted separately in run(). It carries no
-        'presentation', so the loop at the end of this method skips it. Firefox's
-        does carry one, so that loop already promotes it, and running Chrome's
-        promotion for Firefox as well would add each add-on twice.
+        installed_extensions carries no 'presentation' (the nested Extensions
+        worksheet renders it), so it is promoted explicitly here rather than by the
+        loop at the end of this method.
         """
         for name in self.BROWSER_COLLECTIONS:
             values = getattr(browser_analysis, name, None)
@@ -1351,6 +1350,13 @@ class AnalysisSession(object):
                 'profile': profile_path,
                 **browser_analysis.session_structure
             })
+
+        browser_extensions = getattr(browser_analysis, 'installed_extensions', None)
+        if browser_extensions and browser_extensions.get('data'):
+            if not getattr(self, 'installed_extensions', None):
+                self.installed_extensions = {'data': []}
+            self.installed_extensions.setdefault('data', [])
+            self.installed_extensions['data'].extend(browser_extensions['data'])
 
         for item, value in browser_analysis.__dict__.items():
             if isinstance(value, dict):
@@ -1451,16 +1457,6 @@ class AnalysisSession(object):
                                           artifact_filter=self.artifact_filter)
                 browser_analysis.process(api_keys=self.api_keys)
                 self.absorb_browser_analysis(found_profile_path, browser_analysis)
-
-                # installed_extensions carries no 'presentation' (the nested Extensions
-                # worksheet renders it), so absorb_browser_analysis() doesn't promote it.
-                # Firefox's does, which is why this stays in the Chrome branch.
-                browser_extensions = getattr(browser_analysis, 'installed_extensions', None)
-                if browser_extensions and browser_extensions.get('data'):
-                    if not getattr(self, 'installed_extensions', None):
-                        self.installed_extensions = {'data': []}
-                    self.installed_extensions.setdefault('data', [])
-                    self.installed_extensions['data'].extend(browser_extensions['data'])
 
             elif pipeline == "firefox":
                 browser_analysis = Firefox(found_profile_path, browser_name=profile_browser_type,
@@ -3226,6 +3222,8 @@ class AnalysisSession(object):
                         # the path into the notation so the lead travels with the row.
                         name = f'<unpacked - {unpacked_path}>' if unpacked_path else ext_id
                     parts = [f'{name} ({ext_id})']
+                    if getattr(ext, 'version', None):
+                        parts.append(f'Version: {ext.version}')
                     if getattr(ext, 'state', None):
                         parts.append(f'State: {ext.state}')
                     # 'source' = which artifacts the extension was found in (presence),
@@ -3239,6 +3237,9 @@ class AnalysisSession(object):
                         parts.append('From Web Store')
                     if getattr(ext, 'was_installed_by_default', None):
                         parts.append('Default-installed')
+                    # Firefox only: addon signing, from extensions.json signedState.
+                    if getattr(ext, 'signed_state', None):
+                        parts.append(f'Signing: {ext.signed_state}')
                     if getattr(ext, 'install_time', None):
                         parts.append(f'Installed: {fmt_date(ext.install_time)}')
                     if getattr(ext, 'update_time', None):
