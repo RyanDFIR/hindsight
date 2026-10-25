@@ -18,7 +18,6 @@ The only field you are required to complete is "Profile Path". This is the locat
 To install Hindsight (both the command line tool and the web interface), do:
 ```sh
 pip install pyhindsight
-pip install git+https://github.com/cclgroupltd/ccl_chromium_reader.git
 ```
 
 If you'd like to use the "View SQLite DB in Browser" feature in the Hindsight web interface, you'll need to run another install command:

@@ -315,8 +315,7 @@ class ProcessingDisplay:
             # the log for whoever fixes the parser. The corpus baselines record each
             # artifact's status, so a parser that starts raising still fails those tests.
             log.exception(f' - {display_label}: the parser raised an error')
-            reason = f'{type(e).__name__}: {e}' if str(e) else type(e).__name__
-            parser_error = f'parser error ({reason})'
+            parser_error = f'parser error ({utils.describe_exception(e)})'
             returned = None
         sizes_after = self.browser.collection_sizes()
         open_failure = self.browser.last_open_failure

@@ -14,7 +14,8 @@ import json
 import logging
 import puremagic
 import base64
-import ccl_chromium_reader
+from pyhindsight.lib import ccl_chromium_reader
+from pyhindsight.lib.ccl_vendored import CCL_CHROMIUM_READER_COMMIT
 
 from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
@@ -69,27 +70,6 @@ SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
 
 
-def iterate_leveldb_records(ldb_records, unparsed):
-    """Yield the raw records of a RawLevelDb, one file at a time.
-
-    ccl_leveldb raises ValueError when a file holds a block it does not expect, such as
-    the zero-filled tail of a .log file left by an abrupt shutdown, which LevelDB itself
-    skips. A write batch cut short raises IndexError or struct.error instead, when it
-    claims more entries than it holds or is shorter than its 12-byte header. Raised from
-    RawLevelDb.iterate_records_raw(), any of these would end the whole run. Instead, the
-    records read before the damaged block are kept, the file is reported as an unparsed
-    source, and the remaining files are still read.
-    """
-    # Same order as RawLevelDb.iterate_records_raw(), which offers no per-file hook.
-    for ldb_file in sorted(ldb_records._files, key=lambda f: f.file_no):
-        try:
-            yield from ldb_file
-        except (ValueError, IndexError, struct.error) as e:
-            # ccl raises a bare ValueError() for an unknown block type, which has no
-            # message; an exception object is always truthy, so test its text.
-            unparsed.source(ldb_file.path, f'damaged LevelDB data ({str(e) or "unexpected block"})')
-
-
 def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
 
@@ -135,6 +115,37 @@ def chrome_versions_for_schema(database, schema_version, schema_versions=None):
                     f'Reporting it as Chrome {newest_version}; a newer Hindsight may place it exactly.')
         return [newest_version]
     return None
+
+
+def iterate_cache_entries(profile, decompress=True):
+    """Yield (key, entry, error) for a Chromium cache, one cache key at a time.
+
+    `decompress` is passed to ccl as `iterate_cache`'s is: with it False, each body is
+    left as it was sent, for a caller that decompresses it itself.
+
+    ccl's `iterate_cache` is a single generator over the whole cache, and an entry is
+    decoded inside it: a corrupt date, a short metadata buffer or a truncated data stream
+    raises there and ends the generator, so one bad entry decided how much of the cache
+    directory was read. Walking the keys and reading each through the per-key helper
+    `iterate_cache` itself uses turns that into one failed key, yielded with its error.
+
+    The helper is private to ccl_chromium_reader, but the copy bundled under
+    pyhindsight/lib only changes when tools/vendor_ccl.py is run, and
+    tests/test_cache_entry_isolation.py checks the helpers are still there with the
+    arguments used here.
+    """
+    profile._lazy_load_cache()
+    cache = getattr(profile, '_cache', None)
+    if cache is None:
+        return
+    for key in cache.cache_keys():
+        try:
+            entries = list(profile._yield_cache_record(key, decompress, False))
+        except Exception as e:
+            yield key, None, e
+            continue
+        for entry in entries:
+            yield key, entry, None
 
 
 class Chrome(WebBrowser):
@@ -876,7 +887,7 @@ class Chrome(WebBrowser):
         # rewrites a download's entry as it progresses, so earlier records are partial
         # snapshots (empty target path, no end time, etc.).
         latest_by_guid = {}
-        for record in iterate_leveldb_records(ldb_records, unparsed):
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             if record.state.name != 'Live':
                 continue
             if not record.user_key.startswith(b'21_'):
@@ -1430,7 +1441,7 @@ class Chrome(WebBrowser):
         if 'leveldb' in local_storage_listing:
             log.debug(' - Found "leveldb" directory; reading Local Storage LevelDB records')
             ls_ldb_path = os.path.join(ls_path, 'leveldb')
-            ls_ldb_records = utils.get_ldb_records(ls_ldb_path)
+            ls_ldb_records = utils.get_ldb_records(ls_ldb_path, unparsed)
             log.debug(f' - Reading {len(ls_ldb_records)} Local Storage raw LevelDB records; beginning parsing')
             for record in ls_ldb_records:
                 ls_item = self.parse_ls_ldb_record(record)
@@ -1536,8 +1547,8 @@ class Chrome(WebBrowser):
         results = []
         unparsed = ParseFailures('Sessions')
 
-        from ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
-        from ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
+        from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
+        from pyhindsight.lib.ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
         from pyhindsight.lib.page_state import parse_page_state
 
         sessions_path = os.path.join(path, dir_name)
@@ -2047,7 +2058,7 @@ class Chrome(WebBrowser):
         ss_path = os.path.join(path, dir_name)
         log.info('Session Storage:')
         log.info(f' - Reading from {ss_path}')
-        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__}')
+        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ss_path):
             log.error(f' - {ss_path} is not a directory')
@@ -2057,14 +2068,6 @@ class Chrome(WebBrowser):
         log.debug(f' - {len(session_storage_listing)} files in Session Storage directory')
 
         ss_ldb_records = None
-
-        # The bundled ccl_chromium_sessionstorage overwrites its module-level `log`
-        # with None, so its own `log.warning(...)` calls (e.g. when a record fails to
-        # UTF-16-LE decode) raise AttributeError and abort the whole run instead of
-        # skipping the bad record. Hand it a real logger so it degrades gracefully.
-        if ccl_chromium_reader.ccl_chromium_sessionstorage.log is None:
-            ccl_chromium_reader.ccl_chromium_sessionstorage.log = \
-                logging.getLogger('ccl_chromium_reader.ccl_chromium_sessionstorage')
 
         try:
             ss_ldb_records = ccl_chromium_reader.ccl_chromium_sessionstorage.SessionStoreDb(pathlib.Path(ss_path))
@@ -2144,7 +2147,7 @@ class Chrome(WebBrowser):
         idb_path = os.path.join(path, dir_name)
         log.info('IndexedDB:')
         log.info(f' - Reading from {idb_path}')
-        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__}')
+        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(idb_path):
             log.error(f' - {idb_path} is not a directory')
@@ -2160,10 +2163,11 @@ class Chrome(WebBrowser):
             leveldb_dirs_read += 1
 
             origin = storage_directory.split('.indexeddb')[0]
-            blob_directory = None
-            blob_path = os.path.join(idb_path, f'{origin}.indexeddb.blob')
-            if os.path.exists(blob_path):
-                blob_directory = blob_path
+            # Passed even when the directory is absent. With no blob dir ccl raises
+            # "Can't resolve blob if blob dir is not set" from outside its per-record
+            # handler, which ends the object store; with one, a record whose blob is
+            # not on disk is a FileNotFoundError the handler below can skip.
+            blob_directory = os.path.join(idb_path, f'{origin}.indexeddb.blob')
 
             # Budget for this store directory, not for the run: one huge store must not
             # eat the allowance of the ones after it.
@@ -2180,13 +2184,44 @@ class Chrome(WebBrowser):
                     database = origin_idb[database_id.dbid_no]
                     for obj_store_name in database.object_store_names:
                         obj_store = database.get_object_store_by_name(obj_store_name)
+                        # Records this object store yielded, kept or not. `results` spans
+                        # every store read so far, so it cannot say how far this one got.
+                        # A record is counted once it is dealt with, so one whose own
+                        # handling raises is not counted as read before the failure.
+                        obj_store_records = 0
+                        store_label = f'{database}.{obj_store_name}'
+                        skipped_records = []
+
+                        def skip_unreadable_record(key, _raw, store_label=store_label,
+                                                   skipped_records=skipped_records):
+                            # ccl calls this instead of raising for a record it cannot
+                            # read (a missing blob file, a value with no Blink tag, a
+                            # value the deserializer rejects) and then moves on to the
+                            # next record. Without it the first such record ends the
+                            # object store's generator and every later record is lost.
+                            error = sys.exc_info()[1]
+                            reason = utils.describe_exception(error) if error else 'Blink type tag not present'
+                            raw_key = getattr(key, 'raw_key', b'')
+                            skipped_records.append(key)
+                            # The record's position in the store keeps the name unique.
+                            # A store can hold many versions of one key, and ParseFailures
+                            # counts a repeated name once: 106 lost versions of one key
+                            # would otherwise be reported as a single unparsed record.
+                            position = obj_store_records + len(skipped_records)
+                            unparsed.record(
+                                f'{store_label} key {raw_key.hex() if isinstance(raw_key, bytes) else raw_key} '
+                                f'(record {position} in the store)',
+                                f'record could not be read ({reason})')
+
                         try:
-                            for record in obj_store.iterate_records():
+                            for record in obj_store.iterate_records(
+                                    bad_deserializer_data_handler=skip_unreadable_record):
                                 # Past the cap a record is counted, not kept. Reading on to
                                 # the end of the store is what lets the report say exactly
                                 # how many were left out.
                                 if store_budget is not None and store_records >= store_budget:
                                     store_records_over_cap += 1
+                                    obj_store_records += 1
                                     continue
                                 store_records += 1
 
@@ -2219,6 +2254,7 @@ class Chrome(WebBrowser):
                                     object_store=obj_store_name, key_type=key_type,
                                     key_raw=raw_key.hex() if isinstance(raw_key, (bytes, bytearray)) else None,
                                     value_obj=record_value))
+                                obj_store_records += 1
                         except FileNotFoundError as e:
                             unparsed.source(database, f'file not found ({e})')
 
@@ -2231,14 +2267,15 @@ class Chrome(WebBrowser):
                             # no way to tell which data is missing from the output.
                             unparsed.source(
                                 f'{database}.{obj_store_name}',
-                                f'unexpected exception ({e}); {len(results)} records '
-                                f'parsed before the failure')
+                                f'unexpected exception ({utils.describe_exception(e)}); '
+                                f'{obj_store_records} records read from this object store '
+                                f'before the failure')
             except ValueError as e:
                 unparsed.source(storage_directory, str(e))
                 continue
 
             except Exception as e:
-                unparsed.source(storage_directory, f'unexpected exception ({e})')
+                unparsed.source(storage_directory, f'unexpected exception ({utils.describe_exception(e)})')
                 continue
 
             finally:
@@ -3230,7 +3267,7 @@ class Chrome(WebBrowser):
 
     def get_platform_notifications(self, path, dir_name):
         try:
-            from ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
+            from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
         except ImportError as e:
             log.exception(f' - Exception importing ccl_chromium_notifications: {e}')
             return None
@@ -3338,7 +3375,7 @@ class Chrome(WebBrowser):
             log.error(f' - {ldb_path} is not a directory')
             return None
 
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         ldb_records = None
         try:
@@ -3374,7 +3411,7 @@ class Chrome(WebBrowser):
         # fetched from and to verify on-disk bytes against the LDB-recorded hash.
         resource_to_record = {}
 
-        for record in iterate_leveldb_records(ldb_records, unparsed):
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             key = record.user_key
             if key.startswith(b'REG:'):
                 nul_pos = key.rfind(b'\x00')
@@ -3431,7 +3468,7 @@ class Chrome(WebBrowser):
         user_data_count = 0
 
         try:
-            for record in iterate_leveldb_records(ldb_records, unparsed):
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 key = record.user_key
 
                 if key.startswith(b'REG:'):
@@ -3903,7 +3940,7 @@ class Chrome(WebBrowser):
         log.info(f'Cache items from {cache_path_to_parse}:')
         profile = ccl_chromium_reader.ChromiumProfileFolder(
             path=pathlib.Path(path), cache_folder=cache_path_to_parse, missing_data_ok=True)
-        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__}')
+        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         cache_display_name = dir_name
         if dir_name == 'Cache_Data':
@@ -3915,7 +3952,7 @@ class Chrome(WebBrowser):
             return 0
 
         # Decompressed below, to keep the MD5 of the body as sent for ETag checks.
-        cache_items = profile.iterate_cache(url=None, omit_cached_data=False, decompress=False)
+        cache_items = iterate_cache_entries(profile, decompress=False)
         source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
@@ -3958,7 +3995,11 @@ class Chrome(WebBrowser):
             return '; '.join(described)
 
         try:
-            for cache_item in cache_items:
+            for entry_key, cache_item, read_error in cache_items:
+                if read_error is not None:
+                    unparsed.record(getattr(entry_key, 'url', None) or '<unknown key>',
+                                    f'cache entry could not be read ({utils.describe_exception(read_error)})')
+                    continue
                 cache_key = getattr(cache_item, 'key', None)
                 if cache_key is None:
                     # Without a key there is no URL either, so nothing identifies what
@@ -3976,31 +4017,36 @@ class Chrome(WebBrowser):
                     # is reported as absent instead of being invented or losing the URL.
                     untimed_entries += 1
 
-                data, was_decompressed, encoded_md5 = cache_item.data, False, None
-                if data is not None and metadata is not None:
-                    content_encoding = (metadata.get_attribute('content-encoding') or [''])[0]
-                    was_decompressed, data = ccl_chromium_reader.ChromiumProfileFolder._decompress_cache_data(
-                        data, content_encoding)
-                    if was_decompressed:
-                        encoded_md5 = hashlib.md5(cache_item.data, usedforsecurity=False).hexdigest()
+                try:
+                    data, was_decompressed, encoded_md5 = cache_item.data, False, None
+                    if data is not None and metadata is not None:
+                        content_encoding = (metadata.get_attribute('content-encoding') or [''])[0]
+                        was_decompressed, data = ccl_chromium_reader.ChromiumProfileFolder._decompress_cache_data(
+                            data, content_encoding)
+                        if was_decompressed:
+                            encoded_md5 = hashlib.md5(cache_item.data, usedforsecurity=False).hexdigest()
 
-                parsed_item = WebBrowser.CacheItem(
-                    profile=self.profile_path, url=cache_key.url,
-                    request_time=utils.to_datetime(
-                        metadata.request_time.replace(tzinfo=datetime.timezone.utc),
-                        self.timezone) if metadata else None,
-                    locations=describe_locations(cache_item),
-                    key=cache_key, metadata=metadata, data=data, title=None)
-                parsed_item.encoded_md5 = encoded_md5
+                    parsed_item = WebBrowser.CacheItem(
+                        profile=self.profile_path, url=cache_key.url,
+                        request_time=utils.to_datetime(
+                            metadata.request_time.replace(tzinfo=datetime.timezone.utc),
+                            self.timezone) if metadata else None,
+                        locations=describe_locations(cache_item),
+                        key=cache_key, metadata=metadata, data=data, title=None)
+                    parsed_item.encoded_md5 = encoded_md5
 
-                parsed_item.row_type = row_type
-                parsed_item.data_summary = parsed_item.create_data_summary()
-                parsed_item.stringify_http_headers()
-                parsed_item.etag = (metadata.get_attribute("etag") or [""])[0] if metadata else ''
-                parsed_item.last_modified = (metadata.get_attribute("last-modified") or [""])[0] if metadata else ''
-                # The body is already in memory (omit_cached_data=False), so this costs
-                # no extra reads.
-                parsed_item.hash_body(was_decompressed)
+                    parsed_item.row_type = row_type
+                    parsed_item.data_summary = parsed_item.create_data_summary()
+                    parsed_item.stringify_http_headers()
+                    parsed_item.etag = (metadata.get_attribute("etag") or [""])[0] if metadata else ''
+                    parsed_item.last_modified = (metadata.get_attribute("last-modified") or [""])[0] if metadata else ''
+                    # The body is already in memory (omit_cached_data=False), so this costs
+                    # no extra reads.
+                    parsed_item.hash_body(was_decompressed)
+                except Exception as e:
+                    # One entry's bad value is that entry's problem, not the directory's.
+                    unparsed.record(cache_key.url, f'cache entry could not be parsed ({utils.describe_exception(e)})')
+                    continue
                 if cache_item.data and parsed_item.body_sha256 is None:
                     # Body present but left unhashed because it could not be decoded. An
                     # empty hash cell otherwise reads as "no body", so count them.
@@ -4010,8 +4056,12 @@ class Chrome(WebBrowser):
                 results.append(parsed_item)
 
         except Exception as e:
+            # Reaching here means the cache itself (its index or key list) could not be
+            # walked, not one entry. Keep whatever was read before it failed.
             log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
-            return None
+            if not results:
+                return None
+            unparsed.source(source_item, f'cache stopped being readable part way through ({utils.describe_exception(e)})')
 
         if phantom_locations:
             log.info(f' - {phantom_locations} cache locations named a file not present in '
@@ -4038,7 +4088,7 @@ class Chrome(WebBrowser):
         ldb_path = os.path.join(path, dir_name)
         log.info(f'{dir_name}:')
         log.info(f' - Reading from {ldb_path}')
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
@@ -4065,7 +4115,7 @@ class Chrome(WebBrowser):
         dynamic_scripts_all = []    # [(ext_id, seq, state, value)] -- every recoverable record
 
         if ldb_records:
-            for record in iterate_leveldb_records(ldb_records, unparsed):
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 user_key = record.user_key.decode()
                 ext_id = None
                 ext_name = ""
@@ -4356,7 +4406,7 @@ class Chrome(WebBrowser):
             ldb_path = os.path.join(path, dir_name, ext_id)
             log.info(f'{dir_name}:')
             log.info(f' - Reading from {ldb_path}')
-            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
             if not os.path.isdir(ldb_path):
                 unparsed.source(ldb_path, 'not a directory')
@@ -4373,7 +4423,7 @@ class Chrome(WebBrowser):
                 unparsed.source(ldb_path, f'possible LevelDB corruption ({e})')
 
             if ldb_records:
-                for record in iterate_leveldb_records(ldb_records, unparsed):
+                for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                     user_key = record.user_key.decode()
                     parsed = Chrome.ExtensionStorageItem(
                         profile=self.profile_path, extension_id=ext_id, extension_name=self.get_extension_name_from_id(ext_id), key=user_key, value=record.value.decode(),
@@ -4554,7 +4604,7 @@ class Chrome(WebBrowser):
         # web origin (https_www.google.com_0)
         if 'Origins' in fs_root_listing:
             ldb_path = os.path.join(fs_root_path, 'Origins')
-            origins = utils.get_ldb_records(ldb_path, 'ORIGIN:')
+            origins = utils.get_ldb_records(ldb_path, unparsed, 'ORIGIN:')
             for origin in origins:
                 origin_domain = origin['key'].decode()
                 origin_id = origin['value'].decode()
@@ -4595,7 +4645,7 @@ class Chrome(WebBrowser):
                     # // where FileInfo has |parent_id|, |data_path|, |name| and |modification_time|
                     # from cs.chromium.org/chromium/src/storage/browser/file_system/sandbox_directory_database.cc
 
-                    path_items = utils.get_ldb_records(fs_paths_path)
+                    path_items = utils.get_ldb_records(fs_paths_path, unparsed)
 
                     # Loop over records looking for "file_id" records to build backing_files dict. We skip
                     # deleted records here, as deleted "file_id" records aren't useful. We'll loop over this
@@ -4737,6 +4787,7 @@ class Chrome(WebBrowser):
 
     def get_site_characteristics(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Site Characteristics')
 
         self.build_md5_hash_list_of_origins()
 
@@ -4754,7 +4805,7 @@ class Chrome(WebBrowser):
 
         source_item = utils.relpath(sc_root_path, self.profile_path)
 
-        items = utils.get_ldb_records(sc_root_path)
+        items = utils.get_ldb_records(sc_root_path, unparsed)
         for item in items:
             try:
                 from pyhindsight.lib.proto.components.performance_manager.persistence.site_data.site_data_pb2 import SiteDataProto
@@ -4810,10 +4861,11 @@ class Chrome(WebBrowser):
                 log.exception(f' - Exception parsing SiteDataProto ({item}): {e}')
 
         self.parsed_artifacts.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def get_sync_data(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Sync Data')
 
         log.info('Sync Data:')
         sync_data_root_path = os.path.join(path, dir_name)
@@ -4832,7 +4884,7 @@ class Chrome(WebBrowser):
 
         log.info(f' - Reading from {sync_data_root_path}')
 
-        items = utils.get_ldb_records(sync_data_root_path)
+        items = utils.get_ldb_records(sync_data_root_path, unparsed)
 
         from pyhindsight.lib.proto.components.sync.protocol.device_info_specifics_pb2 import DeviceInfoSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.session_specifics_pb2 import SessionSpecifics
@@ -4954,7 +5006,7 @@ class Chrome(WebBrowser):
             result_list.append(sync_record)
 
         self.parsed_sync_data.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def build_hsts_domain_hashes(self):
         domains = self.get_clean_hostnames()

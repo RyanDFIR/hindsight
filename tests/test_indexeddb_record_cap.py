@@ -47,7 +47,7 @@ class _ObjStore:
         self.count = count
         self.iterated = 0
 
-    def iterate_records(self):
+    def iterate_records(self, bad_deserializer_data_handler=None):
         for seq in range(self.count):
             self.iterated += 1
             yield _Record(seq)
@@ -97,7 +97,7 @@ class TestIndexedDBRecordCap(unittest.TestCase):
 
             store = _ObjStore(record_count)
             with mock.patch(
-                    'ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB',
+                    'pyhindsight.lib.ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB',
                     return_value=_WrappedIndexDB(store)):
                 result = browser.get_indexeddb(tmp, 'IndexedDB')
             return result, store, browser.parsed_storage, store_dir_name
