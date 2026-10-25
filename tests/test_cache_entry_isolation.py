@@ -1,3 +1,4 @@
+import inspect
 import os
 import tempfile
 import types
@@ -48,12 +49,6 @@ class FakeProfile:
             raise self.unreadable[key.url]
         yield _entry(key.url, self.metadata.get(key.url))
 
-    def iterate_cache(self, url=None, omit_cached_data=False):
-        # The public generator: one unreadable entry ends it, as ccl's does.
-        self._lazy_load_cache()
-        for key in self._cache.cache_keys():
-            yield from self._yield_cache_record(key, True, omit_cached_data)
-
 
 class _OutOfRangeMetadata:
     """Metadata whose request time cannot be converted, like a far-future timestamp."""
@@ -75,14 +70,13 @@ class TestIterateCacheEntries(unittest.TestCase):
         self.assertEqual([True, False, True], [has_entry for _, has_entry, _ in seen])
         self.assertIsInstance(seen[1][2], ValueError)
 
-    def test_falls_back_to_the_public_generator_without_the_per_key_helper(self):
-        class PublicOnly:
-            def iterate_cache(self, url=None, omit_cached_data=False):
-                yield _entry('https://a/')
-
-        [(key, entry, error)] = list(iterate_cache_entries(PublicOnly()))
-        self.assertEqual('https://a/', key.url)
-        self.assertIsNone(error)
+    def test_the_bundled_ccl_still_has_the_private_helpers_it_relies_on(self):
+        # iterate_cache_entries calls ChromiumProfileFolder internals. They only change
+        # when ccl is re-bundled, and this is what notices if they did.
+        folder = chrome.ccl_chromium_reader.ChromiumProfileFolder
+        self.assertEqual(['self'], list(inspect.signature(folder._lazy_load_cache).parameters))
+        self.assertEqual(['self', 'key', 'decompress', 'omit_data'],
+                         list(inspect.signature(folder._yield_cache_record).parameters))
 
 
 class TestGetCacheIsolatesEntries(unittest.TestCase):
@@ -94,8 +88,10 @@ class TestGetCacheIsolatesEntries(unittest.TestCase):
             os.makedirs(cache_dir)
             open(os.path.join(cache_dir, 'index'), 'wb').close()
             browser = Chrome(tmp)
-            with mock.patch.object(chrome.ccl_chromium_reader, 'ChromiumProfileFolder', return_value=profile):
+            with mock.patch.object(chrome.ccl_chromium_reader, 'ChromiumProfileFolder', return_value=profile), \
+                    mock.patch('pyhindsight.browsers.webbrowser.log') as log:
                 result = browser.get_cache(tmp, 'Cache_Data')
+            self.logged = [call.args[0] for call in log.debug.call_args_list + log.warning.call_args_list]
             return result, [item.url for item in browser.parsed_artifacts]
 
     def test_an_entry_ccl_cannot_read_is_counted_and_the_others_are_kept(self):
@@ -108,6 +104,17 @@ class TestGetCacheIsolatesEntries(unittest.TestCase):
         self.assertEqual(['https://a/', 'https://c/'], urls)
         self.assertEqual(2, result.count)
         self.assertEqual(1, result.unparsed_records)
+        self.assertTrue(any('cache entry could not be read (ValueError: Could not get all of the data '
+                            'for stream 1)' in line for line in self.logged), self.logged)
+
+    def test_an_exception_with_no_message_is_named_in_the_reason(self):
+        profile = FakeProfile(['https://a/', 'https://bad/'], unreadable={'https://bad/': ValueError()})
+
+        result, _ = self.get_cache(profile)
+
+        self.assertEqual(1, result.unparsed_records)
+        self.assertTrue(any('cache entry could not be read (ValueError)' in line for line in self.logged),
+                        self.logged)
 
     def test_an_entry_whose_time_cannot_be_converted_is_counted_and_the_others_are_kept(self):
         profile = FakeProfile(

@@ -126,14 +126,11 @@ def iterate_cache_entries(profile):
     directory was read. Walking the keys and reading each through the per-key helper
     `iterate_cache` itself uses turns that into one failed key, yielded with its error.
 
-    The helper is private to ccl_chromium_reader, which requirements.txt pins to one
-    commit; if it is ever missing, fall back to the public generator.
+    The helper is private to ccl_chromium_reader, but the copy bundled under
+    pyhindsight/lib only changes when tools/vendor_ccl.py is run, and
+    tests/test_cache_entry_isolation.py checks the helpers are still there with the
+    arguments used here.
     """
-    if not all(hasattr(profile, name) for name in ('_lazy_load_cache', '_yield_cache_record')):
-        for entry in profile.iterate_cache(url=None, omit_cached_data=False):
-            yield getattr(entry, 'key', None), entry, None
-        return
-
     profile._lazy_load_cache()
     cache = getattr(profile, '_cache', None)
     if cache is None:
@@ -3997,7 +3994,7 @@ class Chrome(WebBrowser):
             for entry_key, cache_item, read_error in cache_items:
                 if read_error is not None:
                     unparsed.record(getattr(entry_key, 'url', None) or '<unknown key>',
-                                    f'cache entry could not be read: {read_error}')
+                                    f'cache entry could not be read ({utils.describe_exception(read_error)})')
                     continue
                 cache_key = getattr(cache_item, 'key', None)
                 if cache_key is None:
@@ -4035,7 +4032,7 @@ class Chrome(WebBrowser):
                     parsed_item.hash_body(cache_item.was_decompressed)
                 except Exception as e:
                     # One entry's bad value is that entry's problem, not the directory's.
-                    unparsed.record(cache_key.url, f'cache entry could not be parsed: {e}')
+                    unparsed.record(cache_key.url, f'cache entry could not be parsed ({utils.describe_exception(e)})')
                     continue
                 if cache_item.data and parsed_item.body_sha256 is None:
                     # Body present but left unhashed because it could not be decoded. An
@@ -4051,7 +4048,7 @@ class Chrome(WebBrowser):
             log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
             if not results:
                 return None
-            unparsed.source(source_item, f'cache stopped being readable part way through: {e}')
+            unparsed.source(source_item, f'cache stopped being readable part way through ({utils.describe_exception(e)})')
 
         if phantom_locations:
             log.info(f' - {phantom_locations} cache locations named a file not present in '
