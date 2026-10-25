@@ -182,7 +182,7 @@ class TestIndexedDBUnreadableRecords(unittest.TestCase):
             browser.indexeddb_max_records_per_store = None
             browser.resolve_indexeddb_blob_refs = lambda record, origin: record.value
             wrapped = mock.Mock(return_value=_WrappedIndexDB(_Database({'store': _MissingBlobStore(plan)})))
-            with mock.patch('ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB', wrapped),                     mock.patch('pyhindsight.browsers.webbrowser.log') as log:
+            with mock.patch('pyhindsight.lib.ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB', wrapped),                     mock.patch('pyhindsight.browsers.webbrowser.log') as log:
                 result = browser.get_indexeddb(tmp, 'IndexedDB')
             return result, browser.parsed_storage, wrapped, log, tmp
 
