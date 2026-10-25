@@ -23,12 +23,13 @@
     "chrome:session:navigation": 450,
     "chrome:session:tab_closed": 2,
     "chrome:session:tab_last_active": 30,
+    "chrome:session:window": 4,
     "chrome:session_storage:entry": 827,
     "chrome:site_setting:entry": 653,
     "chrome:sync_data:entry": 3673
   },
   "generated_by": {
-    "generated_utc": "2026-10-25T17:42:36Z",
+    "generated_utc": "2026-10-25T20:24:49Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -398,5 +399,5 @@
     }
   },
   "root": "bf4sa_2025_bob-1",
-  "total_records": 65367
+  "total_records": 65371
 }
