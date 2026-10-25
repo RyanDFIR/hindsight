@@ -9,9 +9,12 @@ description = "Browser forensics for Google Chrome/Chromium"
 readme = "README.md"
 requires-python = ">=3.11"
 # The BSD part is the Chromium .proto files under pyhindsight/lib/components and
-# pyhindsight/lib/content and the modules generated from them under pyhindsight/lib/proto,
-# each with Chromium's LICENSE beside it.
-license = "Apache-2.0 AND BSD-3-Clause"
+# pyhindsight/lib/content and the modules generated from them under pyhindsight/lib/proto.
+# The MIT part is ccl_chromium_reader and ccl_simplesnappy, bundled under pyhindsight/lib.
+# Each has its LICENSE beside it. Those files are not listed in license-files: setuptools
+# then warns on every build that the packages "would be ignored", though the wheel is the
+# same either way.
+license = "Apache-2.0 AND BSD-3-Clause AND MIT"
 license-files = ["LICENSE.md"]
 authors = [{name = "Ryan Benson", email = "ryan@hindsig.ht"}]
 keywords = ["chrome", "forensics", "dfir", "google-chrome", "chromium"]
@@ -25,11 +28,11 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 
-# ccl_chromium_reader is deliberately absent: it is not on PyPI, and PyPI rejects
-# direct-URL dependencies, so it cannot be declared here. requirements.txt carries
-# it for source installs. Without it a PyPI install silently loses cache, IndexedDB
-# and LocalStorage parsing.
+# ccl_chromium_reader is bundled (see tools/vendor_ccl.py), so it is not listed here.
+# Brotli and zstd are its dependencies, with the bounds it declares.
 dependencies = [
+    "Brotli>=1.0.9,<=1.2.0",
+    "zstd==1.5.7.2",
     "bottle>=0.12.18",
     "keyring>=21.2.1",
     "protobuf>=6.33.2",

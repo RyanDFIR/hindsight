@@ -1,0 +1,1 @@
+from .ccl_simplesnappy import decompress, decompress_framed
