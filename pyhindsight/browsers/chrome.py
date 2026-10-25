@@ -12,11 +12,12 @@ import datetime
 import re
 import json
 import logging
-import shutil
 import puremagic
 import base64
-import ccl_chromium_reader
+from pyhindsight.lib import ccl_chromium_reader
+from pyhindsight.lib.ccl_vendored import CCL_CHROMIUM_READER_COMMIT
 
+from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
     ParseFailures, WebBrowser, timeline_sort_key)
 from pyhindsight import utils
@@ -58,6 +59,63 @@ SECONDARY_CACHE_DIRS = [
 # what would make the output quietly wrong.
 SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 
+# Most records kept from one IndexedDB store directory. The limit exists for the XLSX
+# output: a worksheet holds at most 1,048,576 rows, xlsxwriter silently discards writes
+# past that, and every IndexedDB record lands on the one Storage sheet. This replaces a
+# skip hard-coded to one extension's store, which covered exactly that store and nothing
+# else. A store over the cap keeps its first records; the rest are still read, so they
+# can be counted, and reported as unparsed records rather than silently missing. It is
+# per store, so it keeps any one store well clear of the sheet limit but does not bound
+# the sheet's total.
+INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
+
+
+def chrome_versions_for_schema(database, schema_version, schema_versions=None):
+    """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
+
+    Chrome migrates a database to its own schema version when it opens it and records that
+    version in the database's meta table, so a match is the newest Chrome that opened the
+    file. A version between two releases' versions was written by a pre-release (canary,
+    dev or beta) build of the later release, and maps to that release.
+
+    The data starts at Chrome 3, where Chromium's release tags do, so a version the oldest
+    release writes also maps to Chrome 1 and 2, which may have written it too.
+
+    Returns None when the data can't place the version: a database it doesn't cover, or a
+    version older than it goes back. A version newer than any in the data maps to the
+    newest Chrome version the data has, with a warning that the data is out of date.
+    """
+    if schema_versions is None:
+        schema_versions = chromium_schema_versions.SCHEMA_VERSIONS
+    if schema_version is None:
+        return None
+
+    releases = [(chrome_version, schema_versions[chrome_version][database])
+                for chrome_version in sorted(schema_versions) if database in schema_versions[chrome_version]]
+    if not releases:
+        return None
+
+    matches = []
+    previous = None
+    for chrome_version, release_schema_version in releases:
+        if schema_version == release_schema_version or \
+                (previous is not None and previous < schema_version < release_schema_version):
+            matches.append(chrome_version)
+        previous = release_schema_version
+    if matches:
+        oldest = min(schema_versions)
+        if matches[0] == releases[0][0] == oldest:
+            matches = list(range(1, oldest)) + matches
+        return matches
+
+    newest_version, newest_schema_version = releases[-1]
+    if schema_version > newest_schema_version:
+        log.warning(f'{database} has schema version {schema_version}, newer than any Chrome release this '
+                    f'version of Hindsight knows (Chrome {newest_version}, schema version {newest_schema_version}). '
+                    f'Reporting it as Chrome {newest_version}; a newer Hindsight may place it exactly.')
+        return [newest_version]
+    return None
+
 
 def iterate_cache_entries(profile):
     """Yield (key, entry, error) for a Chromium cache, one cache key at a time.
@@ -97,11 +155,9 @@ class Chrome(WebBrowser):
         WebBrowser.__init__(
             self, profile_path, browser_name=browser_name, cache_path=cache_path, version=version, timezone=timezone,
             no_copy=no_copy, temp_dir=temp_dir, artifact_filter=artifact_filter)
-        self.profile_path = profile_path
         # Honor a variant passed by the caller (e.g. "Edge", "Brave", "Vivaldi");
         # all Chromium variants currently share this parser and differ only in variant.
         self.browser_name = browser_name or "Chrome"
-        self.cache_path = cache_path
         self.timezone = timezone
         self.installed_extensions = {}
         # Per-extension records keyed by ext_id, merged from the on-disk Extensions/
@@ -116,6 +172,10 @@ class Chrome(WebBrowser):
         self.hsts_hashes = {}
         self.kg_entities = {}
         self.originator_guids = originator_guids
+        # Per-store IndexedDB record cap. An instance attribute rather than a bare
+        # module read, so a caller with a known-good corpus can raise it (or set it to
+        # None to disable the cap) without patching the module.
+        self.indexeddb_max_records_per_store = INDEXEDDB_MAX_RECORDS_PER_STORE
 
         if self.originator_guids is None:
             self.originator_guids = {}
@@ -148,11 +208,12 @@ class Chrome(WebBrowser):
             from Cryptodome.Protocol.KDF import PBKDF2
 
     def determine_version(self):
-        """Determine the version of Chrome databases files by looking for combinations of columns in certain tables.
-        Based on research I did to create "Chrome Evolution" tool - dfir.blog/chrome-evolution
+        """Determine the version of Chrome databases files, from the schema version each one records in its
+        meta table, or failing that by looking for combinations of columns in certain tables.
+        The column checks are based on research I did to create "Chrome Evolution" tool - dfir.blog/chrome-evolution
         """
 
-        possible_versions = list(range(1, 148))
+        possible_versions = list(range(1, max(chromium_schema_versions.RELEASE_TAGS) + 1))
         previous_possible_versions = possible_versions[:]
 
         def update_and_rollback_if_empty(version_list, prev_version_list):
@@ -183,11 +244,39 @@ class Chrome(WebBrowser):
                 else:
                     possible_versions[:] = [x for x in possible_versions if x > version]
 
+        def trim_versions_outside_if(column, table, added, removed):
+            """For a column Chrome added in 'added' and dropped in 'removed': keep versions
+            'added' <= x < 'removed' if 'column' is in 'table', and keep the versions outside
+            that range if it isn't.
+            """
+            if table:
+                if column in table:
+                    possible_versions[:] = [x for x in possible_versions if added <= x < removed]
+                else:
+                    possible_versions[:] = [x for x in possible_versions if x < added or x >= removed]
+
         def trim_lesser_versions(version):
             """Remove version numbers < 'version' from 'possible_versions'"""
             possible_versions[:] = [x for x in possible_versions if x >= version]
 
-        if 'History' in list(self.structure.keys()):
+        def narrow_to_schema_version(database):
+            """Keep the Chrome versions that write 'database's meta.version. Returns False if the schema data
+            can't place that version, so the caller runs its column checks instead.
+            """
+            schema_version = self.schema_versions.get(database)
+            chrome_versions = chrome_versions_for_schema(database, schema_version)
+            if chrome_versions is None:
+                return False
+            # INFO rather than DEBUG: it says which database set the detected version range.
+            log.info(f' - {database} schema version {schema_version}: Chrome '
+                     f'{chrome_versions[0]}-{chrome_versions[-1]}')
+            possible_versions[:] = [x for x in possible_versions if x in chrome_versions]
+            return True
+
+        # A database's meta.version pins it to the Chrome versions that write that schema version (see
+        # chromium_schema_versions). The column checks under each database only run when it can't: no meta
+        # table, or a version the data doesn't cover.
+        if 'History' in list(self.structure.keys()) and not narrow_to_schema_version('History'):
             log.debug('Analyzing \'History\' structure')
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'visits' in list(self.structure['History'].keys()):
@@ -230,7 +319,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Cookies' in list(self.structure.keys()):
+        if 'Cookies' in list(self.structure.keys()) and not narrow_to_schema_version('Cookies'):
             log.debug("Analyzing 'Cookies' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'cookies' in list(self.structure['Cookies'].keys()):
@@ -246,7 +335,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'DIPS' in list(self.structure.keys()):
+        if 'DIPS' in list(self.structure.keys()) and not narrow_to_schema_version('DIPS'):
             log.debug("Analyzing 'DIPS' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'bounces' in list(self.structure['DIPS'].keys()):
@@ -259,7 +348,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Web Data' in list(self.structure.keys()):
+        if 'Web Data' in list(self.structure.keys()) and not narrow_to_schema_version('Web Data'):
             log.debug("Analyzing 'Web Data' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'autofill' in list(self.structure['Web Data'].keys()):
@@ -267,9 +356,11 @@ class Chrome(WebBrowser):
                 trim_lesser_versions_if('date_created', self.structure['Web Data']['autofill'], 35)
             if 'autofill_profiles' in list(self.structure['Web Data'].keys()):
                 trim_lesser_versions_if('language_code', self.structure['Web Data']['autofill_profiles'], 36)
-                trim_lesser_versions_if('validity_bitfield', self.structure['Web Data']['autofill_profiles'], 63)
-                trim_lesser_versions_if(
-                    'is_client_validity_states_updated', self.structure['Web Data']['autofill_profiles'], 71)
+                # Chrome 100 rebuilt autofill_profiles without these two columns
+                # (Web Data schema migration 100, MigrateToVersion100RemoveProfileValidityBitfieldColumn).
+                trim_versions_outside_if('validity_bitfield', self.structure['Web Data']['autofill_profiles'], 63, 100)
+                trim_versions_outside_if(
+                    'is_client_validity_states_updated', self.structure['Web Data']['autofill_profiles'], 71, 100)
             if 'autofill_profile_addresses' in list(self.structure['Web Data'].keys()):
                 trim_lesser_versions(86)
                 trim_lesser_versions_if('city', self.structure['Web Data']['autofill_profile_addresses'], 87)
@@ -294,7 +385,7 @@ class Chrome(WebBrowser):
         possible_versions, previous_possible_versions = \
             update_and_rollback_if_empty(possible_versions, previous_possible_versions)
 
-        if 'Login Data' in list(self.structure.keys()):
+        if 'Login Data' in list(self.structure.keys()) and not narrow_to_schema_version('Login Data'):
             log.debug("Analyzing 'Login Data' structure")
             log.debug(f' - Starting possible versions:  {possible_versions}')
             if 'logins' in list(self.structure['Login Data'].keys()):
@@ -307,7 +398,9 @@ class Chrome(WebBrowser):
             if 'field_info' in list(self.structure['Login Data'].keys()):
                 trim_lesser_versions(80)
             if 'compromised_credentials' in list(self.structure['Login Data'].keys()):
-                trim_lesser_versions(83)
+                # Created in Chrome 80 (Login Data schema 26). Chrome 89 moved its rows to
+                # insecure_credentials and dropped it.
+                possible_versions[:] = [x for x in possible_versions if 80 <= x < 89]
             if 'insecure_credentials' in list(self.structure['Login Data'].keys()):
                 trim_lesser_versions(89)
             log.debug(f' - Finishing possible versions: {possible_versions}')
@@ -456,7 +549,7 @@ class Chrome(WebBrowser):
                             visits.id as visit_id
                         FROM urls, visits WHERE urls.id = visits.url'''}
 
-        source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'History items') as cursor:
             if cursor is None:
                 return None
@@ -536,7 +629,7 @@ class Chrome(WebBrowser):
                         FROM playback LEFT JOIN playbackSession 
                             ON playback.last_updated_time_s = playbackSession.last_updated_time_s'''}
 
-        source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'Media History items') as cursor:
             if cursor is None:
                 return None
@@ -667,7 +760,7 @@ class Chrome(WebBrowser):
                         downloads.state, downloads.full_path, downloads.start_time
                     FROM downloads'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'Download items') as cursor:
             if cursor is None:
@@ -767,7 +860,7 @@ class Chrome(WebBrowser):
         ldb_path = os.path.join(path, dir_name)
         log.info('Downloads (shared_proto_db):')
         log.info(f' - Reading from {ldb_path}')
-        source_item = os.path.relpath(ldb_path, self.profile_path)
+        source_item = utils.relpath(ldb_path, self.profile_path)
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
@@ -794,7 +887,7 @@ class Chrome(WebBrowser):
         # rewrites a download's entry as it progresses, so earlier records are partial
         # snapshots (empty target path, no end time, etc.).
         latest_by_guid = {}
-        for record in ldb_records.iterate_records_raw():
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             if record.state.name != 'Live':
                 continue
             if not record.user_key.startswith(b'21_'):
@@ -979,7 +1072,7 @@ class Chrome(WebBrowser):
                             cookies.last_access_utc, cookies.expires_utc, cookies.secure, cookies.httponly
                         FROM cookies'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Cookie items') as cursor:
             if cursor is None:
                 return None
@@ -1053,7 +1146,7 @@ class Chrome(WebBrowser):
                  6:  '''SELECT origin_url, action_url, username_element, username_value, password_element,
                             password_value, date_created, blacklisted_by_user FROM logins'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Login items') as cursor:
             if cursor is None:
                 return None
@@ -1157,7 +1250,7 @@ class Chrome(WebBrowser):
                  2: '''SELECT autofill_dates.date_created, autofill.name, autofill.value, autofill.count
                         FROM autofill, autofill_dates WHERE autofill.pair_id = autofill_dates.pair_id'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'Autofill items') as cursor:
             if cursor is None:
@@ -1216,7 +1309,7 @@ class Chrome(WebBrowser):
                    'last_user_interaction_time', 'first_web_authn_assertion_time',
                    'last_web_authn_assertion_time']
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'DIPS items') as cursor:
             if cursor is None:
@@ -1247,7 +1340,7 @@ class Chrome(WebBrowser):
         query = {117: '''SELECT opener_site, popup_site, last_popup_time FROM popups''',
                  133: '''SELECT opener_site, popup_site, last_popup_time, is_authentication_interaction FROM popups'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
 
         with self._execute_compatible_query(
                 path, database, query, version, 'DIPS Popup items') as cursor:
@@ -1274,7 +1367,7 @@ class Chrome(WebBrowser):
     def get_bookmarks(self, path, file, version):
         # Set up empty return array
         results = []
-        source_item = os.path.relpath(os.path.join(path, file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, file), self.profile_path)
 
         log.info(f'Bookmark items from {file}:')
 
@@ -1348,7 +1441,7 @@ class Chrome(WebBrowser):
         if 'leveldb' in local_storage_listing:
             log.debug(' - Found "leveldb" directory; reading Local Storage LevelDB records')
             ls_ldb_path = os.path.join(ls_path, 'leveldb')
-            ls_ldb_records = utils.get_ldb_records(ls_ldb_path)
+            ls_ldb_records = utils.get_ldb_records(ls_ldb_path, unparsed)
             log.debug(f' - Reading {len(ls_ldb_records)} Local Storage raw LevelDB records; beginning parsing')
             for record in ls_ldb_records:
                 ls_item = self.parse_ls_ldb_record(record)
@@ -1454,8 +1547,8 @@ class Chrome(WebBrowser):
         results = []
         unparsed = ParseFailures('Sessions')
 
-        from ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
-        from ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
+        from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
+        from pyhindsight.lib.ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
         from pyhindsight.lib.page_state import parse_page_state
 
         sessions_path = os.path.join(path, dir_name)
@@ -1649,7 +1742,7 @@ class Chrome(WebBrowser):
                 continue
 
             file_path = os.path.join(sessions_path, filename)
-            source_item = os.path.relpath(file_path, self.profile_path)
+            source_item = utils.relpath(file_path, self.profile_path)
 
             # Pass 1: Use CCL to parse NavigationEntry commands
             try:
@@ -1965,7 +2058,7 @@ class Chrome(WebBrowser):
         ss_path = os.path.join(path, dir_name)
         log.info('Session Storage:')
         log.info(f' - Reading from {ss_path}')
-        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__}')
+        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ss_path):
             log.error(f' - {ss_path} is not a directory')
@@ -1975,14 +2068,6 @@ class Chrome(WebBrowser):
         log.debug(f' - {len(session_storage_listing)} files in Session Storage directory')
 
         ss_ldb_records = None
-
-        # The bundled ccl_chromium_sessionstorage overwrites its module-level `log`
-        # with None, so its own `log.warning(...)` calls (e.g. when a record fails to
-        # UTF-16-LE decode) raise AttributeError and abort the whole run instead of
-        # skipping the bad record. Hand it a real logger so it degrades gracefully.
-        if ccl_chromium_reader.ccl_chromium_sessionstorage.log is None:
-            ccl_chromium_reader.ccl_chromium_sessionstorage.log = \
-                logging.getLogger('ccl_chromium_reader.ccl_chromium_sessionstorage')
 
         try:
             ss_ldb_records = ccl_chromium_reader.ccl_chromium_sessionstorage.SessionStoreDb(pathlib.Path(ss_path))
@@ -2062,7 +2147,7 @@ class Chrome(WebBrowser):
         idb_path = os.path.join(path, dir_name)
         log.info('IndexedDB:')
         log.info(f' - Reading from {idb_path}')
-        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__}')
+        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(idb_path):
             log.error(f' - {idb_path} is not a directory')
@@ -2077,19 +2162,18 @@ class Chrome(WebBrowser):
                 continue
             leveldb_dirs_read += 1
 
-            # The Ghostery extension has 1M+ records in it; skip for now. Recorded
-            # as an unparsed source rather than skipped silently -- an examiner needs to
-            # know this origin was never read, not infer it from its absence.
-            if storage_directory == 'chrome-extension_mlomiejdfkolichcflejclcbmpeaniij_0.indexeddb.leveldb':
-                unparsed.source(storage_directory,
-                              'skipped by hard-coded rule (very large store)')
-                continue
-
             origin = storage_directory.split('.indexeddb')[0]
-            blob_directory = None
-            blob_path = os.path.join(idb_path, f'{origin}.indexeddb.blob')
-            if os.path.exists(blob_path):
-                blob_directory = blob_path
+            # Passed even when the directory is absent. With no blob dir ccl raises
+            # "Can't resolve blob if blob dir is not set" from outside its per-record
+            # handler, which ends the object store; with one, a record whose blob is
+            # not on disk is a FileNotFoundError the handler below can skip.
+            blob_directory = os.path.join(idb_path, f'{origin}.indexeddb.blob')
+
+            # Budget for this store directory, not for the run: one huge store must not
+            # eat the allowance of the ones after it.
+            store_budget = self.indexeddb_max_records_per_store
+            store_records = 0
+            store_records_over_cap = 0
 
             origin_idb = None
             try:
@@ -2100,8 +2184,47 @@ class Chrome(WebBrowser):
                     database = origin_idb[database_id.dbid_no]
                     for obj_store_name in database.object_store_names:
                         obj_store = database.get_object_store_by_name(obj_store_name)
+                        # Records this object store yielded, kept or not. `results` spans
+                        # every store read so far, so it cannot say how far this one got.
+                        # A record is counted once it is dealt with, so one whose own
+                        # handling raises is not counted as read before the failure.
+                        obj_store_records = 0
+                        store_label = f'{database}.{obj_store_name}'
+                        skipped_records = []
+
+                        def skip_unreadable_record(key, _raw, store_label=store_label,
+                                                   skipped_records=skipped_records):
+                            # ccl calls this instead of raising for a record it cannot
+                            # read (a missing blob file, a value with no Blink tag, a
+                            # value the deserializer rejects) and then moves on to the
+                            # next record. Without it the first such record ends the
+                            # object store's generator and every later record is lost.
+                            error = sys.exc_info()[1]
+                            reason = utils.describe_exception(error) if error else 'Blink type tag not present'
+                            raw_key = getattr(key, 'raw_key', b'')
+                            skipped_records.append(key)
+                            # The record's position in the store keeps the name unique.
+                            # A store can hold many versions of one key, and ParseFailures
+                            # counts a repeated name once: 106 lost versions of one key
+                            # would otherwise be reported as a single unparsed record.
+                            position = obj_store_records + len(skipped_records)
+                            unparsed.record(
+                                f'{store_label} key {raw_key.hex() if isinstance(raw_key, bytes) else raw_key} '
+                                f'(record {position} in the store)',
+                                f'record could not be read ({reason})')
+
                         try:
-                            for record in obj_store.iterate_records():
+                            for record in obj_store.iterate_records(
+                                    bad_deserializer_data_handler=skip_unreadable_record):
+                                # Past the cap a record is counted, not kept. Reading on to
+                                # the end of the store is what lets the report say exactly
+                                # how many were left out.
+                                if store_budget is not None and store_records >= store_budget:
+                                    store_records_over_cap += 1
+                                    obj_store_records += 1
+                                    continue
+                                store_records += 1
+
                                 record_state = 'Deleted'
                                 if record.is_live:
                                     record_state = 'Live'
@@ -2131,6 +2254,7 @@ class Chrome(WebBrowser):
                                     object_store=obj_store_name, key_type=key_type,
                                     key_raw=raw_key.hex() if isinstance(raw_key, (bytes, bytearray)) else None,
                                     value_obj=record_value))
+                                obj_store_records += 1
                         except FileNotFoundError as e:
                             unparsed.source(database, f'file not found ({e})')
 
@@ -2143,19 +2267,31 @@ class Chrome(WebBrowser):
                             # no way to tell which data is missing from the output.
                             unparsed.source(
                                 f'{database}.{obj_store_name}',
-                                f'unexpected exception ({e}); {len(results)} records '
-                                f'parsed before the failure')
+                                f'unexpected exception ({utils.describe_exception(e)}); '
+                                f'{obj_store_records} records read from this object store '
+                                f'before the failure')
             except ValueError as e:
                 unparsed.source(storage_directory, str(e))
                 continue
 
             except Exception as e:
-                unparsed.source(storage_directory, f'unexpected exception ({e})')
+                unparsed.source(storage_directory, f'unexpected exception ({utils.describe_exception(e)})')
                 continue
 
             finally:
                 if origin_idb is not None:
                     origin_idb.close()
+
+            if store_records_over_cap:
+                # Unparsed records, not an unparsed source: the store was read to the end,
+                # so how much is missing is known, and the count shows up in the run's
+                # totals and the Unparsed column instead of being inferred from a
+                # suspiciously round record count.
+                unparsed.record_batch(
+                    storage_directory,
+                    f'{store_records_over_cap} records past the per-store cap of '
+                    f'{store_budget} were not kept',
+                    store_records_over_cap)
 
         # Again, the driver logs the total; this says how many databases it came from,
         # and only mentions the directory listing when it held entries that were not
@@ -2347,7 +2483,7 @@ class Chrome(WebBrowser):
 
         log.info('Extension Settings (Secure Preferences):')
         pref_path = os.path.join(path, preferences_file)
-        source_item = os.path.relpath(pref_path, self.profile_path)
+        source_item = utils.relpath(pref_path, self.profile_path)
         try:
             log.info(f' - Reading from {pref_path}')
             with open(pref_path, encoding='utf-8', errors='replace') as f:
@@ -2683,7 +2819,7 @@ class Chrome(WebBrowser):
 
         # Open 'Preferences' file
         pref_path = os.path.join(path, preferences_file)
-        source_item = os.path.relpath(pref_path, self.profile_path)
+        source_item = utils.relpath(pref_path, self.profile_path)
         try:
             log.info(f' - Reading from {pref_path}')
             with open(pref_path, encoding='utf-8', errors='replace') as f:
@@ -3131,7 +3267,7 @@ class Chrome(WebBrowser):
 
     def get_platform_notifications(self, path, dir_name):
         try:
-            from ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
+            from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
         except ImportError as e:
             log.exception(f' - Exception importing ccl_chromium_notifications: {e}')
             return None
@@ -3141,7 +3277,7 @@ class Chrome(WebBrowser):
         log.info('Platform Notifications:')
         pn_root_path = os.path.join(path, dir_name)
         log.info(f' - Reading from {pn_root_path}')
-        source_item = os.path.relpath(pn_root_path, self.profile_path)
+        source_item = utils.relpath(pn_root_path, self.profile_path)
 
         try:
             with NotificationReader(pathlib.Path(pn_root_path)) as reader:
@@ -3239,7 +3375,7 @@ class Chrome(WebBrowser):
             log.error(f' - {ldb_path} is not a directory')
             return None
 
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         ldb_records = None
         try:
@@ -3275,7 +3411,7 @@ class Chrome(WebBrowser):
         # fetched from and to verify on-disk bytes against the LDB-recorded hash.
         resource_to_record = {}
 
-        for record in ldb_records.iterate_records_raw():
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             key = record.user_key
             if key.startswith(b'REG:'):
                 nul_pos = key.rfind(b'\x00')
@@ -3332,7 +3468,7 @@ class Chrome(WebBrowser):
         user_data_count = 0
 
         try:
-            for record in ldb_records.iterate_records_raw():
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 key = record.user_key
 
                 if key.startswith(b'REG:'):
@@ -3782,7 +3918,7 @@ class Chrome(WebBrowser):
                                 # decompresses; all hold readable content.
                                 tl_item.body_sha256 = body_sha
                                 tl_item.last_modified = last_mod_val
-                                tl_item.source_item = os.path.relpath(
+                                tl_item.source_item = utils.relpath(
                                     scf_path, self.profile_path)
                                 self.parsed_artifacts.append(tl_item)
                     finally:
@@ -3804,7 +3940,7 @@ class Chrome(WebBrowser):
         log.info(f'Cache items from {cache_path_to_parse}:')
         profile = ccl_chromium_reader.ChromiumProfileFolder(
             path=pathlib.Path(path), cache_folder=cache_path_to_parse, missing_data_ok=True)
-        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__}')
+        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         cache_display_name = dir_name
         if dir_name == 'Cache_Data':
@@ -3816,7 +3952,7 @@ class Chrome(WebBrowser):
             return 0
 
         cache_items = iterate_cache_entries(profile)
-        source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
         phantom_locations = 0
@@ -3936,12 +4072,13 @@ class Chrome(WebBrowser):
 
     def get_unified_extension_data(self, path, dir_name):
         results = []
+        unparsed = ParseFailures(dir_name)
 
         # Grab file list of input directory
         ldb_path = os.path.join(path, dir_name)
         log.info(f'{dir_name}:')
         log.info(f' - Reading from {ldb_path}')
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
@@ -3968,7 +4105,7 @@ class Chrome(WebBrowser):
         dynamic_scripts_all = []    # [(ext_id, seq, state, value)] -- every recoverable record
 
         if ldb_records:
-            for record in ldb_records.iterate_records_raw():
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 user_key = record.user_key.decode()
                 ext_id = None
                 ext_name = ""
@@ -4003,7 +4140,7 @@ class Chrome(WebBrowser):
             self._carve_dynamic_scripts(dynamic_scripts_all)
 
         self.parsed_extension_data.extend(results)
-        return len(results)
+        return unparsed.result(len(results))
 
     def get_dnr_extension_rules(self, path, dir_name):
         """Parse declarativeNetRequest DYNAMIC rules from
@@ -4259,7 +4396,7 @@ class Chrome(WebBrowser):
             ldb_path = os.path.join(path, dir_name, ext_id)
             log.info(f'{dir_name}:')
             log.info(f' - Reading from {ldb_path}')
-            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
             if not os.path.isdir(ldb_path):
                 unparsed.source(ldb_path, 'not a directory')
@@ -4276,7 +4413,7 @@ class Chrome(WebBrowser):
                 unparsed.source(ldb_path, f'possible LevelDB corruption ({e})')
 
             if ldb_records:
-                for record in ldb_records.iterate_records_raw():
+                for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                     user_key = record.user_key.decode()
                     parsed = Chrome.ExtensionStorageItem(
                         profile=self.profile_path, extension_id=ext_id, extension_name=self.get_extension_name_from_id(ext_id), key=user_key, value=record.value.decode(),
@@ -4457,7 +4594,7 @@ class Chrome(WebBrowser):
         # web origin (https_www.google.com_0)
         if 'Origins' in fs_root_listing:
             ldb_path = os.path.join(fs_root_path, 'Origins')
-            origins = utils.get_ldb_records(ldb_path, 'ORIGIN:')
+            origins = utils.get_ldb_records(ldb_path, unparsed, 'ORIGIN:')
             for origin in origins:
                 origin_domain = origin['key'].decode()
                 origin_id = origin['value'].decode()
@@ -4498,7 +4635,7 @@ class Chrome(WebBrowser):
                     # // where FileInfo has |parent_id|, |data_path|, |name| and |modification_time|
                     # from cs.chromium.org/chromium/src/storage/browser/file_system/sandbox_directory_database.cc
 
-                    path_items = utils.get_ldb_records(fs_paths_path)
+                    path_items = utils.get_ldb_records(fs_paths_path, unparsed)
 
                     # Loop over records looking for "file_id" records to build backing_files dict. We skip
                     # deleted records here, as deleted "file_id" records aren't useful. We'll loop over this
@@ -4640,6 +4777,7 @@ class Chrome(WebBrowser):
 
     def get_site_characteristics(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Site Characteristics')
 
         self.build_md5_hash_list_of_origins()
 
@@ -4655,9 +4793,9 @@ class Chrome(WebBrowser):
         sc_root_listing = os.listdir(sc_root_path)
         log.debug(f' - {len(sc_root_listing)} files in Site Characteristics directory: {str(sc_root_listing)}')
 
-        source_item = os.path.relpath(sc_root_path, self.profile_path)
+        source_item = utils.relpath(sc_root_path, self.profile_path)
 
-        items = utils.get_ldb_records(sc_root_path)
+        items = utils.get_ldb_records(sc_root_path, unparsed)
         for item in items:
             try:
                 from pyhindsight.lib.proto.components.performance_manager.persistence.site_data.site_data_pb2 import SiteDataProto
@@ -4713,10 +4851,11 @@ class Chrome(WebBrowser):
                 log.exception(f' - Exception parsing SiteDataProto ({item}): {e}')
 
         self.parsed_artifacts.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def get_sync_data(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Sync Data')
 
         log.info('Sync Data:')
         sync_data_root_path = os.path.join(path, dir_name)
@@ -4735,7 +4874,7 @@ class Chrome(WebBrowser):
 
         log.info(f' - Reading from {sync_data_root_path}')
 
-        items = utils.get_ldb_records(sync_data_root_path)
+        items = utils.get_ldb_records(sync_data_root_path, unparsed)
 
         from pyhindsight.lib.proto.components.sync.protocol.device_info_specifics_pb2 import DeviceInfoSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.session_specifics_pb2 import SessionSpecifics
@@ -4857,7 +4996,7 @@ class Chrome(WebBrowser):
             result_list.append(sync_record)
 
         self.parsed_sync_data.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def build_hsts_domain_hashes(self):
         domains = self.get_clean_hostnames()
@@ -4909,7 +5048,7 @@ class Chrome(WebBrowser):
         #    trivially reveal a user's browsing history to an attacker reading the
         #    serialized state on disk.
 
-        source_item = os.path.relpath(ts_file_path, self.profile_path)
+        source_item = utils.relpath(ts_file_path, self.profile_path)
 
         with open(ts_file_path, encoding='utf-8', errors='replace') as f:
             ts_json = json.loads(f.read())
@@ -5013,32 +5152,35 @@ class Chrome(WebBrowser):
         resolved_count = sum(1 for v in self.kg_entities.values() if v is not None)
         log.info(f'Resolved {resolved_count}/{len(self.kg_entities)} Knowledge Graph entity ID(s)')
 
-    def process(self, api_keys=None):
-        supported_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
-                               'Login Data', 'Login Data For Account'
-                               'Extension Cookies', 'Network Action Predictor', 'DIPS']
+    def parse_profile(self, api_keys=None):
+        # Databases whose table/column layout is read (build_structure) so determine_version can
+        # narrow down the Chrome version. Parsing doesn't use this list; each parser checks the
+        # directory listing itself.
+        version_probe_databases = ['History', 'Archived History', 'Media History', 'Web Data', 'Cookies',
+                                   'Login Data', 'Login Data For Account',
+                                   'Extension Cookies', 'Network Action Predictor', 'DIPS']
         supported_subdirs = ['Local Storage', 'Extensions', 'File System', 'Platform Notifications', 'Network', 'Sessions', 'Service Worker', 'shared_proto_db']
         supported_jsons = ['Bookmarks', 'TransportSecurity']  # , 'Preferences']
-        supported_items = supported_databases + supported_subdirs + supported_jsons
+        supported_items = version_probe_databases + supported_subdirs + supported_jsons
         log.debug(f'Supported items: {supported_items}')
 
         input_listing = os.listdir(self.profile_path)
-        for input_file in input_listing:
-            # If input_file is in our supported db list, or if the input_file name starts with a
-            # value in supported_databases followed by '__' (used to add in dbs from additional sources)
-            if input_file in supported_databases or \
-                    input_file.startswith(tuple([db + '__' for db in supported_databases])):
-                # Process structure from Chrome database files
-                self.build_structure(self.profile_path, input_file)
 
+        # Probe Network/ first: build_structure keeps the first copy of a database it sees,
+        # and the parsers prefer Network/Cookies over a top-level Cookies when both exist.
         network_listing = None
         if 'Network' in input_listing:
-            network_listing = os.listdir(os.path.join(self.profile_path, 'Network'))
+            network_path = os.path.join(self.profile_path, 'Network')
+            network_listing = os.listdir(network_path)
             for input_file in network_listing:
-                if input_file in supported_databases or \
-                        input_file.startswith(tuple([db + '__' for db in supported_databases])):
+                if input_file in version_probe_databases:
                     # Process structure from Chrome database files
-                    self.build_structure(self.profile_path, input_file)
+                    self.build_structure(network_path, input_file)
+
+        for input_file in input_listing:
+            if input_file in version_probe_databases:
+                # Process structure from Chrome database files
+                self.build_structure(self.profile_path, input_file)
 
         # Use the structure of the input files to determine possible Chrome versions
         self.determine_version()
@@ -5362,17 +5504,6 @@ class Chrome(WebBrowser):
 
         self.parsed_artifacts.sort(key=timeline_sort_key)
         self.parsed_storage.sort()
-
-        # Clean temp directory after processing profile
-        if not self.no_copy:
-            # The directory is only created when a database is actually copied into it,
-            # so its absence is normal rather than an error worth reporting.
-            if os.path.isdir(self.temp_dir):
-                log.info(f'Deleting temporary directory {self.temp_dir}')
-                try:
-                    shutil.rmtree(self.temp_dir)
-                except Exception as e:
-                    log.error(f'Exception deleting temporary directory: {e}')
 
     class URLItem(WebBrowser.URLItem):
         def decode_transition(self):

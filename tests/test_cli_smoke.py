@@ -75,6 +75,20 @@ class TestCommandLineRuns(unittest.TestCase):
             self.assertTrue(types, 'no records written')
             self.assertTrue(all('history' in t for t in types), types)
 
+    def test_the_default_log_keeps_the_run_record_and_drops_debug(self):
+        # The options and the input listing are the run's own record of what it was
+        # asked to do, so they have to survive the default log level. So does where this
+        # copy's Chrome version data stops, which says whether it can place the profile.
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_hindsight('-f', 'jsonl', output_dir=tmp)
+            self.assertEqual(0, result.returncode, result.stderr)
+            with open(os.path.join(tmp, 'hindsight.log'), encoding='utf-8') as f:
+                body = f.read()
+        self.assertIn('| I | Options: ', body)
+        self.assertIn('| I | Input directory contents: ', body)
+        self.assertIn('| I | Chrome version data goes up to Chrome ', body)
+        self.assertNotIn('| D | ', body)
+
     def test_list_artifacts_needs_no_input_and_exits_cleanly(self):
         result = subprocess.run(
             [sys.executable, 'hindsight.py', '--list-artifacts'],
@@ -87,6 +101,17 @@ class TestCommandLineRuns(unittest.TestCase):
             result = run_hindsight('--only', 'notanartifact', output_dir=tmp)
             self.assertNotEqual(0, result.returncode)
             self.assertIn('Unknown artifact', result.stdout + result.stderr)
+
+    def test_an_input_path_that_cannot_be_read_fails_without_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a_file = os.path.join(tmp, 'not-a-directory')
+            open(a_file, 'w').close()
+            for name, path in (('missing', os.path.join(tmp, 'not-there')), ('a file', a_file)):
+                with self.subTest(name):
+                    result = run_hindsight('-f', 'jsonl', output_dir=tmp, profile=path)
+                    self.assertEqual(2, result.returncode, result.stderr)
+                    self.assertNotIn('Traceback', result.stdout + result.stderr)
+                    self.assertIn(f'cannot read the input directory "{path}"', result.stderr)
 
 
 if __name__ == '__main__':

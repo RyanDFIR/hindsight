@@ -24,7 +24,7 @@ Steps to reproduce the behavior:
 4. See error
 
 **hindsight.log Snippet**
-If possible, attaching the (sanitized if necessary) hindsight.log file output covering the problem run is very helpful for debugging. 
+If possible, attaching the (sanitized if necessary) hindsight.log file output covering the problem run is very helpful for debugging. The default log level leaves out per-record detail, so if you can, re-run with `--log-level debug` (or pick Debug under Log Level in the web UI) and attach that log.
 
 **System Details**
  - Analysis System OS (your forensic workstation): [e.g. Windows 10]

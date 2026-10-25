@@ -21,7 +21,8 @@ import pyhindsight
 import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
 from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
-from pyhindsight.utils import get_rich_banner, make_stdout_resilient
+from pyhindsight.logging_setup import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging
+from pyhindsight.utils import get_rich_banner, make_stdout_resilient, parse_timezone
 
 import rich.align
 import rich.console
@@ -30,14 +31,26 @@ import rich.spinner
 import rich.table
 import rich.text
 
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
 
 def get_base_dir():
     """Get base directory for resolving relative paths (exe dir for frozen apps)."""
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.realpath(__file__))
+
+
+def timezone_argument(value):
+    """argparse type for -t: refuse a timezone that can't be understood.
+
+    Falling back to UTC instead would put every timestamp in the report at the wrong
+    hour, with only a line in the console to say so.
+    """
+    timezone = parse_timezone(value)
+    if timezone is None:
+        raise argparse.ArgumentTypeError(
+            f'can\'t understand timezone "{value}"; use an IANA name such as "Asia/Kolkata" '
+            f'or an offset from UTC such as "UTC+05:30"')
+    return timezone
 
 
 def parse_arguments(analysis_session):
@@ -85,7 +98,16 @@ The Chrome Profile folder default locations are:
                         default=analysis_session.available_output_formats[-1], help='Output format')
     parser.add_argument('-l', '--log', help='Location Hindsight should log to (will append if exists)',
                         default=os.path.join(get_base_dir(), 'hindsight.log'))
-    parser.add_argument('-t', '--timezone', help='Display timezone for the timestamps in XLSX output', default='UTC')
+    parser.add_argument('--log-level', '--log_level', choices=list(LOG_LEVELS), default=DEFAULT_LOG_LEVEL,
+                        help='How much detail to write to the log. "info" (the default) keeps the '
+                             "run's options and input listing, the per-artifact counts, the skip and "
+                             'failure lines and the "Not Parsed items" summary; "debug" adds the '
+                             'per-record detail those totals are made of and the per-directory file '
+                             "listings. Only Hindsight's own loggers are set; dependencies stay at "
+                             "warning either way.")
+    parser.add_argument('-t', '--timezone', default='UTC', type=timezone_argument,
+                        help='Display timezone for the timestamps in the output (all formats): an IANA name such as '
+                             '"Asia/Kolkata" or "America/New_York", or an offset from UTC such as "UTC+05:30"')
     parser.add_argument('-d', '--decrypt', choices=['mac', 'linux'], default=None,
                         help='Try to decrypt Chrome data from a Linux or Mac system; support for both is currently '
                              'buggy and enabling this may cause problems. Only use "--decrypt linux" on data from a '
@@ -125,19 +147,20 @@ The Chrome Profile folder default locations are:
     except UnknownArtifactError as e:
         parser.error(str(e))
 
+    # main() searches the input for profiles before the run starts, to show the count,
+    # and a path that is missing, is a file, or can't be read raised from os.listdir()
+    # as a bare traceback. run() reports the same failure cleanly, but too late.
+    try:
+        os.listdir(args.input)
+    except OSError as e:
+        parser.error(f'cannot read the input directory "{args.input}": {e.strerror or e}')
+
     # Convert any relative paths to absolute using base directory
     base_dir = get_base_dir()
     if not os.path.isabs(args.log):
         args.log = os.path.join(base_dir, args.log)
     if not os.path.isabs(args.temp_dir):
         args.temp_dir = os.path.join(base_dir, args.temp_dir)
-
-    if args.timezone:
-        try:
-            args.timezone = ZoneInfo(args.timezone)
-        except ZoneInfoNotFoundError:
-            print("Couldn't understand timezone; using UTC.")
-            args.timezone = datetime.timezone.utc
 
     # Disable decryption on Linux unless explicitly enabled and supported
     if args.decrypt == 'linux' and analysis_session.available_decrypts['linux'] == 1:
@@ -227,12 +250,9 @@ def main():
     analysis_session.temp_dir = args.temp_dir
     analysis_session.log_path = args.log
 
-    # Set up logging. encoding is explicit because the default is the platform's, cp1252
-    # on Windows, which silently mangles anything outside it. logging swallows handler
-    # errors, so this never raised; it just lost characters from the record of the run.
-    logging.basicConfig(filename=analysis_session.log_path, level=logging.DEBUG,
-                        format='%(asctime)s.%(msecs).03d | %(levelname).01s | %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S', encoding='utf-8')
+    # Set up logging. See pyhindsight.logging_setup for why the root logger is left
+    # at WARNING and only Hindsight's own loggers carry the requested level.
+    configure_logging(analysis_session.log_path, args.log_level, extra_loggers=(__name__,))
     log = logging.getLogger(__name__)
 
     # Hindsight version info

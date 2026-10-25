@@ -103,6 +103,31 @@ class TestParseFailures(unittest.TestCase):
         lines = [m for m in captured.messages if 'Unparsed source' in m]
         self.assertEqual(1, len(lines))
 
+    def test_a_record_batch_adds_its_count_to_the_unparsed_records(self):
+        unparsed = ParseFailures('IndexedDB')
+        unparsed.record('db9.sqlite:key1', 'decode failed')
+        unparsed.record_batch('big.leveldb', '84079 records past the per-store cap were not kept', 84079)
+        self.assertEqual(ParseResult(10, 0, 84080), unparsed.result(10))
+
+    def test_a_record_batch_is_logged_and_counted_once(self):
+        # One line for the whole batch, with the count in it, rather than one line per
+        # record; repeating the same batch must not double the loss.
+        with _LogCapture() as captured:
+            unparsed = ParseFailures('IndexedDB')
+            for _ in range(2):
+                unparsed.record_batch('big.leveldb', '84079 records past the per-store cap were not kept', 84079)
+            result = unparsed.result(10)
+        lines = [m for m in captured.messages if m.startswith(' - Unparsed records in IndexedDB')]
+        self.assertEqual(1, len(lines), captured.messages)
+        self.assertIn('big.leveldb', lines[0])
+        self.assertIn('84079 records past the per-store cap', lines[0])
+        self.assertEqual(84079, result.unparsed_records)
+
+    def test_an_empty_record_batch_is_not_a_loss(self):
+        unparsed = ParseFailures('IndexedDB')
+        unparsed.record_batch('big.leveldb', 'nothing past the cap', 0)
+        self.assertFalse(unparsed.result(10).is_partial)
+
     def test_a_clean_parse_is_not_partial(self):
         self.assertFalse(ParseFailures('X').result(10).is_partial)
         self.assertTrue(ParseFailures('X').result(10)._replace(unparsed_records=1).is_partial)

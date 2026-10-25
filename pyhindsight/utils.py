@@ -1,14 +1,16 @@
 import datetime
+import functools
 import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import struct
 import sys
+import zoneinfo
 from pyhindsight import __version__
-from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +62,58 @@ def sha256_file(file_path, chunk_size=1024 * 1024):
     return digest.hexdigest()
 
 
+def long_path(path):
+    """`path` in the form Windows will open past MAX_PATH; unchanged elsewhere.
+
+    Unless long paths are enabled machine-wide (they are off by default), Windows
+    refuses any path of 260 characters or more, and a browser profile reaches that
+    easily: Service Worker CacheStorage files sit five directories below the profile,
+    so evidence kept at an ordinary depth is enough. The extended-length form,
+    \\\\?\\C:\\..., is exempt. It has to be absolute and use backslashes, which
+    abspath() provides; Windows does no further normalization on it.
+    """
+    if os.name != 'nt' or not path:
+        return path
+    path = os.fspath(path)
+    if path.startswith('\\\\?\\'):
+        return path
+    path = os.path.abspath(path)
+    if path.startswith('\\\\.\\'):
+        # A device path (\\.\C:\..., or \\.\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\...
+        # for a shadow copy) only needs its prefix changed. Taken for UNC, it would name a
+        # server called ".", and nothing under it would open.
+        return '\\\\?\\' + path[4:]
+    if path.startswith('\\\\'):
+        return '\\\\?\\UNC\\' + path[2:]  # \\server\share\... -> \\?\UNC\server\share\...
+    return '\\\\?\\' + path
+
+
+def short_path(path):
+    """The ordinary form of an extended-length path (see long_path); others unchanged.
+
+    Only a drive or UNC path has an ordinary form. One such as \\\\?\\GLOBALROOT\\... or
+    \\\\?\\Volume{...}\\... has none, and is left as it is.
+    """
+    if isinstance(path, str):
+        if path.startswith('\\\\?\\UNC\\'):
+            return '\\\\' + path[8:]
+        drive = path[4:5]
+        if (path.startswith('\\\\?\\') and drive.isascii() and drive.isalpha()
+                and path[5:6] == ':' and path[6:7] in ('', '\\')):
+            return path[4:]
+    return path
+
+
+def relpath(path, start):
+    """os.path.relpath() for two paths that may differ in being extended-length.
+
+    Windows treats \\\\?\\C: and C: as different drives, so relpath() raises when only
+    one of the two went through long_path(), as when a caller hands a parser its own
+    path rather than the browser's.
+    """
+    return os.path.relpath(long_path(path), long_path(start))
+
+
 def note_open_failure(browser, database_path, database_name, reason):
     """Remember why a database could not be opened, for the caller to report.
 
@@ -70,7 +124,7 @@ def note_open_failure(browser, database_path, database_name, reason):
     """
     try:
         browser.last_open_failure = (
-            os.path.join(database_path, database_name), str(reason))
+            short_path(os.path.join(database_path, database_name)), str(reason))
     except AttributeError:
         pass
 
@@ -88,11 +142,8 @@ def open_sqlite_db(chrome, database_path, database_name):
 
     else:
         try:
-            # Create 'temp' directory if it doesn't exist
-            Path(chrome.temp_dir).mkdir(parents=True, exist_ok=True)
-
-            # Copy database and any WAL/SHM files to temp directory
-            db_path_to_open = os.path.join(chrome.temp_dir, database_name)
+            # Copy database and any WAL/SHM files to this browser's own temp directory
+            db_path_to_open = os.path.join(chrome.copy_dir(), database_name)
             for suffix in ['', '-wal', '-shm']:
                 src = os.path.join(database_path, database_name + suffix)
                 if os.path.exists(src):
@@ -344,6 +395,52 @@ def decode_page_transition(raw):
     return result
 
 
+@functools.lru_cache(maxsize=None)
+def _zone_names():
+    """Map each IANA zone name, lowercased, to its proper spelling."""
+    return {name.lower(): name for name in zoneinfo.available_timezones()}
+
+
+def parse_timezone(value):
+    """Return the tzinfo a timezone setting names, or None if it names none.
+
+    Accepts an IANA name ("Asia/Kolkata", "America/New_York", "UTC") or a fixed offset
+    from UTC ("UTC+5:30", "UTC+05:30", "+0530", "GMT-3"). IANA has fixed-offset zones
+    only for whole hours (Etc/GMT-5, and nothing for +5:30), so without the second form
+    the only way to ask for a half- or quarter-hour offset was to know a city in it.
+
+    The sign means what it says: "GMT-3" is three hours behind UTC. IANA's Etc zones
+    invert it ("Etc/GMT-3" is three hours ahead), and that form still goes to zoneinfo
+    and keeps its IANA meaning.
+    """
+    if isinstance(value, datetime.tzinfo):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    match = re.fullmatch(r'(?:UTC|GMT)?([+-])(\d{1,2})(?::?(\d{2}))?',
+                         value.replace(' ', ''), re.IGNORECASE)
+    if match:
+        sign, hours, minutes = match.groups()
+        offset = datetime.timedelta(hours=int(hours), minutes=int(minutes or 0))
+        # Offsets in use run from -12:00 to +14:00. Accept up to 14 hours either way;
+        # anything past that is a typo.
+        if int(minutes or 0) > 59 or offset > datetime.timedelta(hours=14):
+            return None
+        return datetime.timezone(-offset if sign == '-' else offset)
+
+    # Names are matched without regard to case. Otherwise "asia/kolkata" works only on a
+    # case-insensitive filesystem, and when it does the header says "asia/kolkata".
+    name = value.strip()
+    name = _zone_names().get(name.lower(), name)
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        # OSError: on Windows, a name with a character no path can hold (a tab, say)
+        # fails in the file lookup rather than as "not found".
+        return None
+
+
 def friendly_date(timestamp):
     if isinstance(timestamp, (str, int)):
         return to_datetime(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -353,12 +450,52 @@ def friendly_date(timestamp):
         return timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
-def get_ldb_records(ldb_path, prefix=''):
+def describe_exception(e):
+    """Name an exception for a failure reason: 'TypeName: message', or 'TypeName'.
+
+    `str(e)` alone is blank for a bare `raise ValueError()`, which ccl does, and which
+    would leave a reason reading 'unexpected exception ()'.
+    """
+    message = str(e)
+    return f'{type(e).__name__}: {message}' if message else type(e).__name__
+
+
+def iterate_leveldb_records(ldb_records, unparsed):
+    """Yield the raw records of a RawLevelDb, one file at a time, reporting damage.
+
+    ccl_leveldb skips damage in a .log file and reads on, as LevelDB does, listing
+    each skip in the file's `damage`; a file with any is reported as an unparsed
+    source after its readable records are yielded. Zero-filled space, which Chrome
+    leaves at the end of a .log file after an abrupt shutdown, holds no records and
+    is not damage. A table (.ldb) file can still raise, and raised from
+    RawLevelDb.iterate_records_raw() that would end the run; instead the records
+    read before it are kept, the file is reported, and the remaining files are read.
+    """
+    # Same order as RawLevelDb.iterate_records_raw(), which offers no per-file hook.
+    for ldb_file in sorted(ldb_records._files, key=lambda f: f.file_no):
+        try:
+            yield from ldb_file
+        except (ValueError, IndexError, struct.error) as e:
+            unparsed.source(ldb_file.path, f'damaged LevelDB data ({describe_exception(e)})')
+            continue
+        damage = getattr(ldb_file, 'damage', None)
+        if damage:
+            skipped = sum(d.length for d in damage)
+            unparsed.source(ldb_file.path, f'damaged LevelDB data ({skipped} bytes skipped in '
+                                           f'{len(damage)} place{"s" if len(damage) > 1 else ""}; '
+                                           f'first at offset {damage[0].offset}: {damage[0].reason})')
+
+
+def get_ldb_records(ldb_path, unparsed, prefix=''):
     """Open a LevelDB at given path and return a list of records, optionally
-    filtered by a prefix string. Key and value are kept as byte strings."""
+    filtered by a prefix string. Key and value are kept as byte strings.
+
+    A LevelDB that cannot be opened, and a file in it that is damaged, is reported to
+    `unparsed` (a ParseFailures), so the artifact shows as partial rather than as a
+    clean read of fewer records."""
 
     try:
-        from ccl_chromium_reader.storage_formats import ccl_leveldb
+        from pyhindsight.lib.ccl_chromium_reader.storage_formats import ccl_leveldb
     except ImportError:
         log.warning(f' - Failed to import ccl_leveldb; unable to process {ldb_path}')
         return []
@@ -371,13 +508,13 @@ def get_ldb_records(ldb_path, prefix=''):
     try:
         db = ccl_leveldb.RawLevelDb(ldb_path)
     except Exception as e:
-        log.warning(f' - Could not open {ldb_path} as LevelDB; {e}')
+        unparsed.source(ldb_path, f'could not open as LevelDB ({e})')
         return []
 
     cleaned_records = []
 
     try:
-        for record in db.iterate_records_raw():
+        for record in iterate_leveldb_records(db, unparsed):
             cleaned_record = record.__dict__
 
             if record.file_type.name == 'Ldb':
@@ -390,11 +527,8 @@ def get_ldb_records(ldb_path, prefix=''):
 
                 cleaned_records.append(cleaned_record)
 
-    except ValueError:
-        log.warning(' - Exception reading LevelDB: ValueError')
-
     except Exception as e:
-        log.warning(f' - Exception reading LevelDB: {e}')
+        unparsed.source(ldb_path, f'error reading LevelDB ({describe_exception(e)})')
 
     db.close()
     return cleaned_records

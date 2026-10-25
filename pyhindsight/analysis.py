@@ -8,19 +8,19 @@ import os
 import sqlite3
 import sys
 import time
-import uuid
 import xlsxwriter
 import xlsxwriter.worksheet
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pyhindsight import __version__
 from pyhindsight.artifact_filter import ArtifactFilter
+from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.chrome import Chrome
 from pyhindsight.browsers.firefox import Firefox
 from pyhindsight.browsers.webbrowser import (
     ARTIFACT_STATUS_FAILED, ARTIFACT_STATUS_SKIPPED, WebBrowser, spinner_name,
     timeline_sort_key)
-from pyhindsight.utils import friendly_date
+from pyhindsight.lib import etag
+from pyhindsight.utils import friendly_date, parse_timezone
 import pyhindsight.plugins
 import rich.align
 import rich.console
@@ -45,7 +45,17 @@ class NoneSafeWorksheet(xlsxwriter.worksheet.Worksheet):
     flat JSON -- e.g. an extension's DNR rules.json -- have no LevelDB seq or offset.
     Those are absences at the source, so they are written as empty cells instead of
     being coerced to '' or 0, which would invent a value the artifact does not contain.
+
+    It also marks strings cut to fit Excel's 32,767 character-per-cell limit.
+    xlsxwriter truncates an over-length string on its own but says nothing in the
+    cell, so a reader has no way to tell the value is incomplete. Cutting it here
+    and ending it with a suffix makes the truncation visible in the output.
     """
+
+    # Excel's hard per-cell limit; xlsxwriter enforces it itself but truncates
+    # silently (xls_strmax), with no indication in the cell that it happened.
+    MAX_CELL_LENGTH = 32767
+    TRUNCATION_SUFFIX = '<TRUNCATED>'
 
     # convert_cell_args preserves the base class's support for A1 notation.
     @xlsxwriter.worksheet.convert_cell_args
@@ -54,11 +64,118 @@ class NoneSafeWorksheet(xlsxwriter.worksheet.Worksheet):
             return self.write_blank(row, col, None, cell_format)
         return super().write_string(row, col, string, cell_format)
 
+    def _write_string(self, row, col, string, cell_format=None):
+        # write_string() and write()'s string branch both funnel through here, so
+        # patching this one spot marks truncation for every string-writing path.
+        if len(string) > self.MAX_CELL_LENGTH:
+            string = string[:self.MAX_CELL_LENGTH - len(self.TRUNCATION_SUFFIX)] + self.TRUNCATION_SUFFIX
+        return super()._write_string(row, col, string, cell_format)
+
     @xlsxwriter.worksheet.convert_cell_args
     def write_number(self, row, col, number=None, cell_format=None):
         if number is None:
             return self.write_blank(row, col, None, cell_format)
         return super().write_number(row, col, number, cell_format)
+
+
+# Rows in one .xlsx worksheet. Past this, xlsxwriter's write methods return -1 and leave
+# the cell out of the file without raising. Module-level so tests can lower it.
+XLSX_MAX_ROWS = 1048576
+
+
+class RolloverWorksheet(object):
+    """A worksheet that continues onto "Name (2)", "Name (3)", ... once it is full.
+
+    xlsxwriter does not raise when a row is past the end of the sheet: the write
+    returns -1 and the cell is simply not in the workbook, so a large Timeline or
+    Storage sheet used to lose its tail with nothing logged (#359). The XLSX writers
+    keep one running row number per collection; this maps that number onto the sheet
+    with room for it. The title bar, column headers, column widths and frozen panes are
+    repeated on every continuation, and each sheet gets its own autofilter.
+
+    Rows before ``header_rows`` are the header and are written to every sheet. A merged
+    range in the data must fit on one sheet, which holds for the single-row group
+    headers these writers use.
+    """
+
+    def __init__(self, workbook, name, continuation_name, header_rows=2):
+        self._workbook = workbook
+        self._name = name
+        self._continuation_name = continuation_name
+        self._header_rows = header_rows
+        self._rows_per_sheet = XLSX_MAX_ROWS - header_rows
+        self._setup = []
+        self.sheets = [workbook.add_worksheet(name)]
+
+    def _locate(self, row, add_sheets=True):
+        """Return the sheet index and the row on that sheet for a running row number."""
+        if row < self._header_rows:
+            return None, row
+        index, offset = divmod(row - self._header_rows, self._rows_per_sheet)
+        while add_sheets and index >= len(self.sheets):
+            self._add_continuation()
+        return index, self._header_rows + offset
+
+    def _add_continuation(self):
+        name = self._continuation_name(self._name)
+        log.warning(f'XLSX sheet "{self.sheets[-1].name}" reached {XLSX_MAX_ROWS:,} rows; '
+                    f'continuing on "{name}"')
+        sheet = self._workbook.add_worksheet(name)
+        for method, args, kwargs in self._setup:
+            getattr(sheet, method)(*args, **kwargs)
+        self.sheets.append(sheet)
+
+    def _on_every_sheet(self, method, args, kwargs=None):
+        kwargs = kwargs or {}
+        self._setup.append((method, args, kwargs))
+        result = 0
+        for sheet in self.sheets:
+            result = getattr(sheet, method)(*args, **kwargs)
+        return result
+
+    def _write(self, method, row, col, args):
+        index, sheet_row = self._locate(row)
+        if index is None:
+            return self._on_every_sheet(method, (row, col) + args)
+        return getattr(self.sheets[index], method)(sheet_row, col, *args)
+
+    @xlsxwriter.worksheet.convert_cell_args
+    def write(self, row, col, *args):
+        return self._write('write', row, col, args)
+
+    @xlsxwriter.worksheet.convert_cell_args
+    def write_string(self, row, col, *args):
+        return self._write('write_string', row, col, args)
+
+    @xlsxwriter.worksheet.convert_cell_args
+    def write_number(self, row, col, *args):
+        return self._write('write_number', row, col, args)
+
+    @xlsxwriter.worksheet.convert_range_args
+    def merge_range(self, first_row, first_col, last_row, last_col, *args):
+        if last_row < self._header_rows:
+            return self._on_every_sheet('merge_range', (first_row, first_col, last_row, last_col) + args)
+        index, sheet_row = self._locate(first_row)
+        return self.sheets[index].merge_range(
+            sheet_row, first_col, sheet_row + last_row - first_row, last_col, *args)
+
+    def set_column(self, *args, **kwargs):
+        return self._on_every_sheet('set_column', args, kwargs)
+
+    def freeze_panes(self, *args, **kwargs):
+        return self._on_every_sheet('freeze_panes', args, kwargs)
+
+    @xlsxwriter.worksheet.convert_range_args
+    def autofilter(self, first_row, first_col, last_row, last_col):
+        """Filter from the header row to ``last_row``, or to the end of each full sheet."""
+        index, sheet_row = self._locate(last_row, add_sheets=False)
+        if index is None:
+            index, sheet_row = 0, last_row
+        result = 0
+        for i, sheet in enumerate(self.sheets):
+            sheet_last = sheet_row if i == index else XLSX_MAX_ROWS - 1
+            result = sheet.autofilter(first_row, first_col, min(sheet_last, XLSX_MAX_ROWS - 1), last_col)
+        return result
 
 
 class HindsightEncoder(json.JSONEncoder):
@@ -902,9 +1019,10 @@ class AnalysisSession(object):
                     log.info(f'   - {label}: not parsed; {reason}')
                 elif result.is_partial:
                     log.info(f'   - {label}: parsed {result.count}, '
-                             f'{result.describe_unparsed()}; each one is logged above '
-                             f'as "Unparsed source in {result.key}" / '
-                             f'"Unparsed record in {result.key}"')
+                             f'{result.describe_unparsed()}; each unparsed source is '
+                             f'logged above as "Unparsed source in {result.key}", and '
+                             f'each unparsed record as "Unparsed record in {result.key}" '
+                             f'at the debug level (--log-level debug)')
         if anything:
             sources, records, artifacts = self.unparsed_totals()
             if sources or records:
@@ -1199,22 +1317,13 @@ class AnalysisSession(object):
 
         # If the timezone exists as a string, convert it to a tzinfo object
         if self.timezone is not None and isinstance(self.timezone, str):
-            try:
-                self.timezone = ZoneInfo(self.timezone)
-            except ZoneInfoNotFoundError:
+            timezone = parse_timezone(self.timezone)
+            if timezone is None:
                 log.warning("Couldn't understand timezone; using UTC.")
-                self.timezone = datetime.timezone.utc
+                timezone = datetime.timezone.utc
+            self.timezone = timezone
         elif self.timezone is None:
             self.timezone = datetime.timezone.utc
-
-        # Give this run its own subdirectory of the temp directory. Copies inside it are
-        # named only after the database (<temp_dir>/History), and the default temp path is
-        # a fixed location next to the binary, so two Hindsight runs at once would write
-        # to the same <temp_dir>/History and each could end up parsing the other's profile
-        # data -- or delete the directory while the other was still reading from it.
-        # Isolating per run also keeps each run's cleanup from touching another's files.
-        if self.temp_dir:
-            self.temp_dir = os.path.join(self.temp_dir, f'run-{os.getpid()}-{uuid.uuid4().hex[:8]}')
 
         # Redact secret values before dumping the options. Log files are routinely
         # attached to bug reports, so the key names are kept (useful for confirming
@@ -1223,7 +1332,9 @@ class AnalysisSession(object):
         if loggable_options.get('api_keys'):
             loggable_options['api_keys'] = {
                 key_name: '<redacted>' for key_name in loggable_options['api_keys']}
-        log.debug("Options: " + str(loggable_options))
+        # INFO rather than DEBUG: this is the run's own record of what it was asked to
+        # do, so it belongs in a default-level log.
+        log.info("Options: " + str(loggable_options))
 
         # Normalize the optional -b/--browser_type override. When set, it forces a
         # single family for every discovered profile (case-insensitive); when unset,
@@ -1240,6 +1351,12 @@ class AnalysisSession(object):
 
         # Analysis start time
         log.info("Starting analysis")
+        # A Hindsight older than the profile it reads can't place that profile's Chrome
+        # version, so say where this copy's knowledge stops.
+        newest_chrome = max(chromium_schema_versions.RELEASE_TAGS)
+        log.info(f'Chrome version data goes up to Chrome {newest_chrome} (generated '
+                 f'{chromium_schema_versions.GENERATED}); a profile from a newer Chrome is '
+                 f'reported as {newest_chrome} at most.')
         if self.artifact_filter.is_active:
             log.info(f'Artifact selection in effect -- {self.artifact_filter.describe()}')
 
@@ -1251,7 +1368,7 @@ class AnalysisSession(object):
             log.error(fail_message)
             self.fatal_error = fail_message
             return False
-        log.debug("Input directory contents: " + str(input_listing))
+        log.info("Input directory contents: " + str(input_listing))
 
         # Search input directory for browser profiles to analyze
         input_profiles = self.find_browser_profiles(self.input_path)
@@ -1349,9 +1466,89 @@ class AnalysisSession(object):
                             log.info(f'Exception occurred while analyzing {item} for analysis session promotion: {e}')
 
         self.apply_originator_visit_sources()
+        self.apply_etag_analysis()
         self.generate_display_version()
         self.log_unparsed_summary()
         return True
+
+    def apply_etag_analysis(self):
+        """Decode the ETag on each download and cache record.
+
+        Most servers build an ETag from the file's modification time and size, so it
+        can say when the file was last changed on the server and how big it was. Each
+        decode is checked against the Last-Modified header and the byte count stored
+        with the same response; see pyhindsight/lib/etag.py for the formats.
+        """
+        decoded_count = 0
+        for item in self.parsed_artifacts:
+            if not getattr(item, 'etag', None):
+                continue
+
+            content_encoding = encoded_size = None
+            if isinstance(item, WebBrowser.DownloadItem):
+                size = item.total_bytes
+                reference_time = item.start_time
+                reference_label = 'the download'
+                size_label = 'total bytes'
+                body = None
+            else:
+                # body_sha256 is only set when the cached bytes are the resource itself
+                # rather than a still-encoded copy, which is also the condition for
+                # their length and hash to be comparable with the ETag's.
+                body = getattr(item, 'data', None) if getattr(item, 'body_sha256', None) else None
+                size = len(body) if body else None
+                reference_time = item.timestamp
+                reference_label = 'the request'
+                size_label = 'the cached body size'
+                # A server sending a precompressed file builds its ETag from that file,
+                # so the decoded size can match the compressed Content-Length instead.
+                metadata = getattr(item, 'metadata', None)
+                content_range = None
+                if metadata is not None:
+                    try:
+                        content_range = (metadata.get_attribute('content-range') or [None])[0]
+                    except (AttributeError, TypeError):
+                        pass
+                if content_range:
+                    # A range response (206) holds only part of the file, so its length
+                    # and hash say nothing about the ETag. The total after the slash,
+                    # when the server gave one rather than '*', is the file's size.
+                    body = None
+                    size_label = 'the Content-Range total'
+                    try:
+                        size = int(content_range.rpartition('/')[2])
+                    except (TypeError, ValueError):
+                        size = None
+                elif body and metadata is not None:
+                    try:
+                        content_encoding = (metadata.get_attribute('content-encoding') or [None])[0]
+                        encoded_size = int((metadata.get_attribute('content-length') or [0])[0])
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+            if not isinstance(reference_time, datetime.datetime) or reference_time.year < 1971:
+                reference_time = None
+
+            try:
+                result = etag.analyze(
+                    item.etag, last_modified=item.last_modified, size=size,
+                    reference_time=reference_time, reference_label=reference_label,
+                    size_label=size_label, body=body, timezone=self.timezone,
+                    content_encoding=content_encoding, encoded_size=encoded_size)
+            except Exception as e:
+                log.warning(f'Could not analyze ETag {item.etag!r}: {e}')
+                continue
+            if result is None:
+                continue
+
+            item.etag_format = result.format
+            item.etag_modified = result.modified.astimezone(self.timezone) if result.modified else None
+            item.etag_size = result.size
+            item.etag_notes = result.summary or None
+            if result.modified is not None or result.size is not None:
+                decoded_count += 1
+
+        if decoded_count:
+            log.info(f' - Decoded a server-side modification time or size from {decoded_count} ETags')
 
     def apply_originator_visit_sources(self):
         if not self.originator_guids:
@@ -1556,7 +1753,7 @@ class AnalysisSession(object):
                     pass  # different drives on Windows -> keep absolute path
             return source
 
-        w = workbook.add_worksheet('Timeline')
+        w = RolloverWorksheet(workbook, 'Timeline', get_unique_sheet_name)
         used_sheet_names.add('timeline')
 
         # Define cell formats
@@ -1601,7 +1798,8 @@ class AnalysisSession(object):
         w.merge_range('A1:I1', f'Hindsight Internet History Forensics (v{__version__}) - Timeline', title_header_format)
         w.merge_range('J1:W1', 'URL Visit Specific', center_header_format)
         w.merge_range('X1:AC1', 'Download Specific', center_header_format)
-        w.merge_range('AD1:AG1', 'Cache Specific', center_header_format)
+        w.merge_range('AD1:AF1', 'Download & Cache Specific', center_header_format)
+        w.merge_range('AG1:AH1', 'Cache Specific', center_header_format)
 
         # Write column headers
         w.write(1, 0, 'Type', header_format)
@@ -1635,8 +1833,9 @@ class AnalysisSession(object):
         w.write(1, 28, 'Tab URL', header_format)
         w.write(1, 29, 'ETag', header_format)
         w.write(1, 30, 'Last Modified', header_format)
-        w.write(1, 31, 'All HTTP Headers', header_format)
-        w.write(1, 32, 'Body SHA256', header_format)
+        w.write(1, 31, f'ETag Decoded ({self.timezone})', header_format)
+        w.write(1, 32, 'All HTTP Headers', header_format)
+        w.write(1, 33, 'Body SHA256', header_format)
 
         # Set column widths
         w.set_column('A:A', 16)  # Type
@@ -1671,10 +1870,28 @@ class AnalysisSession(object):
         # Common between Downloads and Cache
         w.set_column('AD:AD', 12)  # ETag
         w.set_column('AE:AE', 27)  # Last Modified
+        w.set_column('AF:AF', 70)  # ETag Decoded
 
         # Cache Specific
-        w.set_column('AF:AF', 30)  # HTTP Headers
-        w.set_column('AG:AG', 66)  # Body SHA256 (64 hex characters)
+        w.set_column('AG:AG', 30)  # HTTP Headers
+        w.set_column('AH:AH', 66)  # Body SHA256 (64 hex characters)
+
+        def write_etag_analysis(row, item, value_format):
+            # One readable cell here; SQLite and JSONL keep the parts as separate fields
+            # for querying. Set by apply_etag_analysis, so absent on items that never
+            # went through a run. An unrecognized ETag says nothing beyond the ETag
+            # column beside it, so its cell is left empty here.
+            etag_format = getattr(item, 'etag_format', None)
+            if not etag_format or etag_format == 'Unrecognized':
+                return
+            parts = [etag_format]
+            if getattr(item, 'etag_modified', None) is not None:
+                parts.append(f'modified {friendly_date(item.etag_modified)}')
+            if getattr(item, 'etag_size', None) is not None:
+                parts.append(f'{item.etag_size:,} bytes')
+            if getattr(item, 'etag_notes', None):
+                parts.append(item.etag_notes)
+            w.write(row, 31, ' | '.join(parts), value_format)
 
         # Start at the row after the headers and begin writing out the items in parsed_artifacts
         row_number = 2
@@ -1756,9 +1973,10 @@ class AnalysisSession(object):
                     w.write_string(row_number, 25, open_friendly, green_value_format)  # opened
                     w.write(row_number, 29, item.etag, green_value_format)  # ETag
                     w.write(row_number, 30, item.last_modified, green_value_format)  # Last Modified
+                    write_etag_analysis(row_number, item, green_value_format)
                     request_headers = getattr(item, 'request_headers', None)
                     if request_headers:
-                        w.write(row_number, 31, str(request_headers), green_value_format)  # headers
+                        w.write(row_number, 32, str(request_headers), green_value_format)  # headers
 
                 elif item.row_type.startswith("bookmark folder"):
                     w.write_string(row_number, 0, item.row_type, red_type_format)  # record_type
@@ -1801,8 +2019,9 @@ class AnalysisSession(object):
                     w.write(row_number, 7, item.source_item or '', gray_value_format)  # Source Item
                     w.write(row_number, 29, item.etag, gray_value_format)  # ETag
                     w.write(row_number, 30, item.last_modified, gray_value_format)  # Last Modified
-                    w.write(row_number, 31, item.http_headers_str, gray_value_format)  # headers
-                    w.write(row_number, 32, item.body_sha256, gray_value_format)  # Body SHA256
+                    write_etag_analysis(row_number, item, gray_value_format)
+                    w.write(row_number, 32, item.http_headers_str, gray_value_format)  # headers
+                    w.write(row_number, 33, item.body_sha256, gray_value_format)  # Body SHA256
 
                 elif item.row_type.startswith("local storage"):
                     w.write_string(row_number, 0, item.row_type, gray_type_format)  # record_type
@@ -1968,12 +2187,12 @@ class AnalysisSession(object):
         w.freeze_panes(2, 0)  # Freeze top row
         # Items with no usable timestamp are sorted to the end (see timeline_sort_key)
         # rather than dated to the epoch and hidden, so no row filter is applied here.
-        w.autofilter(1, 0, row_number, 32)  # Add autofilter
+        w.autofilter(1, 0, row_number, 33)  # Add autofilter
 
         ##############################
         # Storage worksheet
         ##############################
-        s = workbook.add_worksheet('Storage')
+        s = RolloverWorksheet(workbook, 'Storage', get_unique_sheet_name)
         used_sheet_names.add('storage')
         # Title bar
         s.merge_range('A1:G1', f'Hindsight Internet History Forensics (v{__version__}) - Storage', title_header_format)
@@ -2090,7 +2309,7 @@ class AnalysisSession(object):
         #########################################
         # Service Workers worksheet
         #########################################
-        sw = workbook.add_worksheet('Service Workers')
+        sw = RolloverWorksheet(workbook, 'Service Workers', get_unique_sheet_name)
         used_sheet_names.add('service workers')
 
         # Title bar
@@ -2566,7 +2785,7 @@ class AnalysisSession(object):
         #########################################
         # Extension Data worksheet
         #########################################
-        ext = workbook.add_worksheet('Extension Data')
+        ext = RolloverWorksheet(workbook, 'Extension Data', get_unique_sheet_name)
         used_sheet_names.add('extension data')
         # Title bar
         ext.merge_range('A1:G1', f'Hindsight Internet History Forensics (v{__version__}) - Extension Data', title_header_format)
@@ -2631,7 +2850,7 @@ class AnalysisSession(object):
         #########################################
         # Sync Data worksheet
         #########################################
-        sync_ws = workbook.add_worksheet('Sync Data')
+        sync_ws = RolloverWorksheet(workbook, 'Sync Data', get_unique_sheet_name)
         used_sheet_names.add('sync data')
         # Title bar
         sync_ws.merge_range('A1:E1', f'Hindsight Internet History Forensics (v{__version__}) - Sync Data', title_header_format)
@@ -2701,7 +2920,7 @@ class AnalysisSession(object):
         def write_presentation_sheet(d, sheet_label):
             """Render one plugin/preferences 'presentation' block as its own worksheet."""
             sheet_name = get_unique_sheet_name(d['presentation']['title'])
-            p = workbook.add_worksheet(sheet_name)
+            p = RolloverWorksheet(workbook, sheet_name, get_unique_sheet_name)
             title = d['presentation']['title']
             if 'version' in d['presentation']:
                 title += f" (v{d['presentation']['version']})"
@@ -2757,7 +2976,7 @@ class AnalysisSession(object):
             WINDOW_TYPES = {0: 'Normal', 1: 'App', 2: 'App Popup', 3: 'DevTools'}
 
             try:
-                sess_ws = workbook.add_worksheet(get_unique_sheet_name('Sessions'))
+                sess_ws = RolloverWorksheet(workbook, get_unique_sheet_name('Sessions'), get_unique_sheet_name)
 
                 # Title bar
                 sess_ws.merge_range('A1:I1', f'Hindsight Internet History Forensics (v{__version__})'
@@ -2908,7 +3127,7 @@ class AnalysisSession(object):
         installed_extensions = getattr(self, 'installed_extensions', None)
         if installed_extensions and installed_extensions.get('data'):
             try:
-                ext_ws = workbook.add_worksheet(get_unique_sheet_name('Extensions'))
+                ext_ws = RolloverWorksheet(workbook, get_unique_sheet_name('Extensions'), get_unique_sheet_name)
 
                 # Title bar
                 ext_ws.merge_range('A1:H1', f'Hindsight Internet History Forensics (v{__version__})'
@@ -3107,7 +3326,8 @@ class AnalysisSession(object):
         # Stable sort preserves insertion order within a group (e.g. multiple per-profile
         # Preferences/Sessions sheets) and sends any unlisted sheet to the end.
         def _tab_order(ws):
-            name = ws.name
+            # A continuation such as "Storage (2)" sorts with the sheet it continues.
+            name = re.sub(r' \(\d+\)$', '', ws.name)
             if name == 'Timeline':
                 return 0
             if name.startswith('Sessions'):
@@ -3149,7 +3369,10 @@ class AnalysisSession(object):
                 # Hindsight over the cached bytes. Separate columns because separate
                 # provenance: one is evidence, the other is a measurement of it.
                 'mime_type TEXT, referrer TEXT, tab_url TEXT, download_source TEXT, hash TEXT, guid TEXT, '
-                'body_sha256 TEXT)')
+                'body_sha256 TEXT, '
+                # Decoded from `etag` by Hindsight (see pyhindsight/lib/etag.py); appended
+                # rather than placed beside it so existing column positions are unchanged.
+                'etag_format TEXT, etag_modified TEXT, etag_size INT, etag_notes TEXT)')
 
             c.execute(
                 'CREATE TABLE storage(type TEXT, origin TEXT, key TEXT, value TEXT, '
@@ -3157,6 +3380,43 @@ class AnalysisSession(object):
                 'database TEXT, object_store TEXT, key_type TEXT, key_raw TEXT, '
                 'seq INT, state INT, state_friendly TEXT, file_exists BOOL, file_size INT, '
                 'magic_results TEXT, file_sha256 TEXT)')
+
+            # Service Worker records get their own table, as they get their own XLSX sheet.
+            # In `storage` their registration, resource, script and cache fields could only
+            # be packed into `value`. After the columns every table shares, each column is
+            # named for an item attribute, which is also the record's JSONL key, so a SQL
+            # query and a JSONL filter use the same field names. One row per item; a column
+            # that does not apply to a record's type is NULL.
+            service_worker_columns = (
+                ('scope_url', 'TEXT'), ('script_url', 'TEXT'), ('url', 'TEXT'),
+                ('request_url', 'TEXT'), ('final_url', 'TEXT'), ('storage_key', 'TEXT'),
+                ('origin_hash', 'TEXT'), ('registration_id', 'INT'), ('version_id', 'INT'),
+                ('resource_id', 'INT'), ('resource_state', 'TEXT'), ('is_active', 'BOOL'),
+                ('has_fetch_handler', 'BOOL'), ('script_type', 'TEXT'), ('update_via_cache', 'TEXT'),
+                ('navigation_preload_enabled', 'BOOL'), ('navigation_preload_header', 'TEXT'),
+                ('resources_total_size_bytes', 'INT'), ('http_status', 'TEXT'), ('content_type', 'TEXT'),
+                ('request_method', 'TEXT'), ('response_status', 'INT'), ('response_status_text', 'TEXT'),
+                ('response_type', 'TEXT'), ('response_mime_type', 'TEXT'), ('size_bytes', 'INT'),
+                ('sha256_checksum', 'TEXT'), ('body_size', 'INT'), ('body_sha256', 'TEXT'),
+                ('body_sha256_match', 'BOOL'), ('cache_name', 'TEXT'), ('cache_uuid', 'TEXT'),
+                ('user_data_key', 'TEXT'), ('subsystem', 'TEXT'), ('raw_value_size', 'INT'),
+                ('script_response_time', 'TEXT'), ('response_time', 'TEXT'), ('request_time', 'TEXT'),
+                ('entry_time', 'TEXT'), ('event_time', 'TEXT'), ('source_file', 'TEXT'),
+            )
+            service_worker_time_columns = {
+                'script_response_time', 'response_time', 'request_time', 'entry_time', 'event_time'}
+            service_worker_shared_columns = (
+                'type, origin, key, value, modification_time, interpretation, profile, source_path, '
+                'seq, state, state_friendly')
+            c.execute(
+                'CREATE TABLE service_workers(type TEXT, origin TEXT, key TEXT, value TEXT, '
+                'modification_time TEXT, interpretation TEXT, profile TEXT, source_path TEXT, '
+                'seq INT, state INT, state_friendly TEXT, '
+                + ', '.join(f'{name} {sql_type}' for name, sql_type in service_worker_columns) + ')')
+            service_worker_insert = (
+                f'INSERT INTO service_workers ({service_worker_shared_columns}, '
+                + ', '.join(name for name, _ in service_worker_columns) + ') VALUES ('
+                + ', '.join(['?'] * (11 + len(service_worker_columns))) + ')')
 
             c.execute(
                 'CREATE TABLE installed_extensions(name TEXT, description TEXT, version TEXT, ext_id TEXT, '
@@ -3209,6 +3469,13 @@ class AnalysisSession(object):
                     return str(value)
                 return value
 
+            def etag_columns(item):
+                # Set by apply_etag_analysis; absent on items that never went through a run.
+                return (getattr(item, 'etag_format', None),
+                        sql_date(friendly_date(getattr(item, 'etag_modified', None))),
+                        getattr(item, 'etag_size', None), getattr(item, 'etag_notes', None))
+
+            unhandled_timeline = collections.Counter()
             for item in self.parsed_artifacts:
                 if item.row_type.startswith('url'):
                     c.execute(
@@ -3246,15 +3513,17 @@ class AnalysisSession(object):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item, '
                         'interrupt_reason, danger_type, opened, etag, last_modified, '
-                        'mime_type, referrer, tab_url, download_source, hash, guid, http_headers) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'mime_type, referrer, tab_url, download_source, hash, guid, http_headers, '
+                        'etag_format, etag_modified, etag_size, etag_notes) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.status_friendly, item.value,
                          item.interpretation, item.profile, item.source_item, item.interrupt_reason_friendly,
                          item.danger_type_friendly, item.opened, item.etag, sql_date(item.last_modified),
                          getattr(item, 'mime_type', None), getattr(item, 'referrer', None),
                          getattr(item, 'tab_url', None), getattr(item, 'download_source', None),
                          getattr(item, 'hash', None), getattr(item, 'guid', None),
-                         str(item.request_headers) if getattr(item, 'request_headers', None) else None))
+                         str(item.request_headers) if getattr(item, 'request_headers', None) else None,
+                         *etag_columns(item)))
 
                 elif item.row_type.startswith('bookmark folder'):
                     c.execute(
@@ -3287,12 +3556,13 @@ class AnalysisSession(object):
                 elif item.row_type.startswith('cache'):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item, '
-                        'etag, last_modified, http_headers, body_sha256)'
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'etag, last_modified, http_headers, body_sha256, '
+                        'etag_format, etag_modified, etag_size, etag_notes)'
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.data_summary,
                          item.locations, item.interpretation, item.profile, item.source_item,
                          item.etag, sql_date(item.last_modified), item.http_headers_str,
-                         item.body_sha256))
+                         item.body_sha256, *etag_columns(item)))
 
                 elif item.row_type.startswith('login'):
                     c.execute(
@@ -3301,12 +3571,34 @@ class AnalysisSession(object):
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
 
-                elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session', 'permission action', 'profile creation')):
+                elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session',
+                                               'permission action', 'profile creation', 'extension')):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item) '
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
+
+                else:
+                    # Previously fell through with no branch and no message, the way every
+                    # Service Worker row used to go missing from the storage table. The
+                    # else matters more than any one branch: it is what makes the next
+                    # unhandled row_type a reported number rather than a silent absence.
+                    unhandled_timeline[item.row_type] += 1
+
+            for row_type, count in unhandled_timeline.most_common():
+                log.error(f'{count} "{row_type}" record(s) are MISSING from the SQLite '
+                          f'timeline table; no INSERT branch handles that row_type')
+
+            def service_worker_cell(name, value):
+                # Times go through sql_date like every other date column. Anything else
+                # sqlite3 cannot bind directly is stored as its text form rather than
+                # failing the insert.
+                if name in service_worker_time_columns or isinstance(value, datetime.datetime):
+                    return sql_date(value)
+                if value is None or isinstance(value, (str, int, float, bytes)):
+                    return value
+                return str(value)
 
             unhandled_storage = collections.Counter()
             for item in self.parsed_storage:
@@ -3339,15 +3631,17 @@ class AnalysisSession(object):
                          item.file_exists, item.file_size, item.magic_results, item.file_sha256))
 
                 elif item.row_type.startswith('service worker'):
+                    # Written to service_workers, not storage; see that table's definition.
                     c.execute(
-                        'INSERT INTO storage (type, origin, key, value, modification_time, '
-                        'interpretation, profile, source_path, seq, state, state_friendly) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (item.row_type, getattr(item, 'origin', None), item.key, item.value,
+                        service_worker_insert,
+                        (item.row_type, getattr(item, 'origin', None), item.key,
+                         service_worker_cell('value', item.value),
                          sql_date(getattr(item, 'last_modified', None)),
                          getattr(item, 'interpretation', None), item.profile,
                          item.source_path, getattr(item, 'seq', None),
-                         state_to_int(item.state), item.state))
+                         state_to_int(item.state), item.state,
+                         *(service_worker_cell(name, getattr(item, name, None))
+                           for name, _ in service_worker_columns)))
 
                 elif item.row_type.startswith('indexed'):
                     c.execute(

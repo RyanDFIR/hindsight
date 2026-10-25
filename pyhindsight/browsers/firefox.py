@@ -168,11 +168,9 @@ class Firefox(WebBrowser):
         WebBrowser.__init__(
             self, profile_path, browser_name=browser_name, cache_path=cache_path, version=version,
             timezone=timezone, no_copy=no_copy, temp_dir=temp_dir, artifact_filter=artifact_filter)
-        self.profile_path = profile_path
         # Honor a variant passed by the caller (e.g. "Tor"); Tor Browser is
         # Firefox-based and currently shares this parser, differing only in variant.
         self.browser_name = browser_name or "Firefox"
-        self.cache_path = cache_path
         self.timezone = timezone
         self.no_copy = no_copy
         self.temp_dir = temp_dir
@@ -290,7 +288,7 @@ class Firefox(WebBrowser):
                 log.error(' - Could not query history with any known schema')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
                 visit_time = utils.to_datetime(row.get('visit_date'), self.timezone)
                 last_visit_time = utils.to_datetime(row.get('last_visit_date'), self.timezone) \
@@ -343,7 +341,7 @@ class Firefox(WebBrowser):
             rows = cursor.fetchall()
             folder_titles = {r['id']: (r['title'] or '') for r in rows if r['type'] == BOOKMARK_TYPE_FOLDER}
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in rows:
                 bm_type = row.get('type')
                 parent_folder = folder_titles.get(row.get('parent'), '')
@@ -402,7 +400,7 @@ class Firefox(WebBrowser):
                 log.error(f' - Could not query cookies: {e}')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
             for row in cursor:
                 creation = utils.to_datetime(row.get('creationTime'), self.timezone)
@@ -478,7 +476,7 @@ class Firefox(WebBrowser):
                 log.error(f' - Could not query downloads: {e}')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
                 start = utils.to_datetime(row.get('start_time'), self.timezone)
                 end = utils.to_datetime(row.get('end_time'), self.timezone) if row.get('end_time') else start
@@ -549,7 +547,7 @@ class Firefox(WebBrowser):
                 log.error(f' - Could not query form history: {e}')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
                 # 'it'/'ts' are internal timestamp-ish fields excluded by the autopsy parser.
                 field = (row.get('fieldname') or '').strip()
@@ -621,7 +619,7 @@ class Firefox(WebBrowser):
                 log.error(f' - Could not query permissions: {e}')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
                 # ms -> PRTime us so to_datetime hits its 16-digit branch.
                 mod_ms = row.get('modificationTime') or 0
@@ -683,7 +681,7 @@ class Firefox(WebBrowser):
             log.error(f' - Could not read {full_path}: {e}')
             return None
 
-        source_item = os.path.relpath(full_path, self.profile_path)
+        source_item = utils.relpath(full_path, self.profile_path)
         n_records = len(blob) // self._HSTS_RECORD_SIZE
         for i in range(n_records):
             rec = blob[i * self._HSTS_RECORD_SIZE:(i + 1) * self._HSTS_RECORD_SIZE]
@@ -868,7 +866,7 @@ class Firefox(WebBrowser):
             log.error(f' - Could not read {full_path}: {e}')
             return None
 
-        source_item = os.path.relpath(full_path, self.profile_path)
+        source_item = utils.relpath(full_path, self.profile_path)
         zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
 
         for login in data.get('logins', []):
@@ -1428,7 +1426,7 @@ class Firefox(WebBrowser):
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 unparsed.source(full_path, f'could not be parsed ({e})')
                 continue
-            source_item = os.path.relpath(full_path, self.profile_path)
+            source_item = utils.relpath(full_path, self.profile_path)
             before = structure['entries_seen']
             windows_before = len(seen_windows)
             self._walk_sessionstore(doc, label, source_item, results, structure,
@@ -1531,7 +1529,7 @@ class Firefox(WebBrowser):
             except (json.JSONDecodeError, OSError) as e:
                 unparsed.source(full, f'could not be parsed ({e})')
                 continue
-            source_item = os.path.relpath(full, self.profile_path)
+            source_item = utils.relpath(full, self.profile_path)
             before = len(results)
             for child in doc.get('children', []) or []:
                 _walk(child, '', name, source_item)
@@ -1564,7 +1562,7 @@ class Firefox(WebBrowser):
                 log.error(f' - Could not query favicons: {e}')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             zero_ts = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
 
             for row in cursor:
@@ -1642,7 +1640,7 @@ class Firefox(WebBrowser):
                 log.error(f' - Could not query bounce-tracking state: {e}')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
                 ts = utils.to_datetime(row.get('timeStamp'), self.timezone)
                 entry_type = row.get('entryType')
@@ -1689,7 +1687,7 @@ class Firefox(WebBrowser):
                 log.error(f' - Could not query content-blocking events: {e}')
                 return None
 
-            source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+            source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
                 # `timestamp` is a TEXT date like '2025-09-15'.
                 ts_raw = row.get('timestamp') or ''
@@ -2069,6 +2067,9 @@ class Firefox(WebBrowser):
         for redirected in redirected_cache_paths(self.profile_path):
             cand = _entries_under(redirected)
             if cand:
+                # Outside both the profile and --cache, so the report needs telling
+                # how to name it (see WebBrowser.restore_display_paths).
+                self.display_path_aliases.append((cand, utils.short_path(cand)))
                 log.info(f' - Auto-detected Firefox cache at {cand}')
                 return cand
 
@@ -2084,7 +2085,7 @@ class Firefox(WebBrowser):
             log.error(f' - Could not read cache directory: {e}')
             return None
 
-        source_item = os.path.relpath(cache_entries_dir, self.profile_path) \
+        source_item = utils.relpath(cache_entries_dir, self.profile_path) \
             if cache_entries_dir.startswith(self.profile_path) else cache_entries_dir
         skipped = 0
         recovery_counts = {}
@@ -2259,7 +2260,7 @@ class Firefox(WebBrowser):
                                   f'data table unreadable ({e})')
                     continue
 
-                source_path = os.path.relpath(ls_db, self.profile_path)
+                source_path = utils.relpath(ls_db, self.profile_path)
                 got_any = False
                 row_iter = enumerate(cursor)
                 while True:
@@ -2692,7 +2693,7 @@ class Firefox(WebBrowser):
                         unparsed.source(db_filename, f'object_data unreadable ({e})')
                         continue
 
-                    source_path = os.path.relpath(
+                    source_path = utils.relpath(
                         os.path.join(idb_dir, db_filename), self.profile_path)
                     seq = 0
                     got_any = False
@@ -2828,7 +2829,7 @@ class Firefox(WebBrowser):
                                   f'entries unreadable ({e})')
                     continue
 
-                source_item = os.path.relpath(db_file, self.profile_path)
+                source_item = utils.relpath(db_file, self.profile_path)
                 got_any = False
                 file_mtime = None
                 try:
@@ -2856,7 +2857,7 @@ class Firefox(WebBrowser):
                                 cand = os.path.join(
                                     morgue_dir, str(bucket), f'{body_id}.final')
                                 if os.path.isfile(cand):
-                                    body_path = os.path.relpath(
+                                    body_path = utils.relpath(
                                         cand, self.profile_path)
                                 else:
                                     missing_bodies += 1
@@ -2936,7 +2937,7 @@ class Firefox(WebBrowser):
         self.parsed_artifacts.extend(results)
         return unparsed.result(len(results))
 
-    def process(self):
+    def parse_profile(self):
         try:
             input_listing = os.listdir(self.profile_path)
         except OSError as e:

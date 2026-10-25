@@ -86,8 +86,8 @@
         "IndexedDB": {
           "count": 0,
           "status": "partial",
-          "unparsed_records": 0,
-          "unparsed_sources": 1
+          "unparsed_records": 1,
+          "unparsed_sources": 0
         },
         "Login Data": {
           "count": 0,

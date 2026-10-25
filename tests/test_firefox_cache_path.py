@@ -107,7 +107,9 @@ class TestResolveCacheDirOnDisk(unittest.TestCase):
             with self.subTest(path=label):
                 resolved = Firefox(written)._resolve_cache_dir()
                 self.assertIsNotNone(resolved, f'cache not found for {written}')
-                self.assertEqual(entries.resolve(), pathlib.Path(resolved).resolve())
+                # The same directory, not the same spelling: on Windows the browser
+                # reads through the extended-length form (see utils.long_path).
+                self.assertTrue(os.path.samefile(entries, resolved), resolved)
 
     def test_a_mac_layout_resolves(self):
         profile, entries = self._tree(
@@ -120,7 +122,9 @@ class TestResolveCacheDirOnDisk(unittest.TestCase):
             with self.subTest(path=label):
                 resolved = Firefox(written)._resolve_cache_dir()
                 self.assertIsNotNone(resolved, f'cache not found for {written}')
-                self.assertEqual(entries.resolve(), pathlib.Path(resolved).resolve())
+                # The same directory, not the same spelling: on Windows the browser
+                # reads through the extended-length form (see utils.long_path).
+                self.assertTrue(os.path.samefile(entries, resolved), resolved)
 
     def test_a_cache_inside_the_profile_wins(self):
         profile, _outside = self._tree(
@@ -131,7 +135,7 @@ class TestResolveCacheDirOnDisk(unittest.TestCase):
         inside = profile / 'cache2' / 'entries'
         inside.mkdir(parents=True)
         resolved = Firefox(str(profile))._resolve_cache_dir()
-        self.assertEqual(inside.resolve(), pathlib.Path(resolved).resolve())
+        self.assertTrue(os.path.samefile(inside, resolved), resolved)
 
     def test_a_profile_with_no_cache_anywhere_resolves_to_nothing(self):
         profile = pathlib.Path(self.tmp.name, 'Users', 'bob', 'AppData', 'Roaming',
