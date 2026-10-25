@@ -147,6 +147,9 @@ python tools/vendor_ccl.py <commit>
 To take new upstream work, merge upstream's `master` into `hindsight` and bundle that
 commit the same way. `VENDORED.md` in the bundled directory records the commit it came
 from, and `python tools/vendor_ccl.py --check` fails if the bundled files differ from it.
+The commit is also in `pyhindsight/lib/ccl_vendored.py`, which Hindsight reads to log it
+beside each ccl module version, since those versions do not change when a fork fix is
+bundled.
 
 ## Refreshing the Chrome schema versions
 

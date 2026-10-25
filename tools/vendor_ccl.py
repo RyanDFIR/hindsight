@@ -41,6 +41,10 @@ SNAPPY_REPO = 'https://github.com/cclgroupltd/ccl_simplesnappy.git'
 SNAPPY_COMMIT = '3d085230baa8c46cf2090ebba29bf6e8eab31087'
 
 PACKAGES = ('ccl_chromium_reader', 'ccl_simplesnappy')
+
+# The commits, for Hindsight to log beside ccl's module versions. Those versions do not
+# change when a fork fix is bundled, so on their own they do not say which code ran.
+VERSION_MODULE = 'ccl_vendored.py'
 VENDORED_RE = re.compile(r'^Commit: `([0-9a-f]{40})`$', re.MULTILINE)
 
 
@@ -151,6 +155,11 @@ def vendor(ccl_commit, snappy_commit, out_root):
                      'ccl_chromium_reader', CCL_REPO, ccl_hash, upstream=CCL_UPSTREAM)
         write_record(copy_package(work / 'snappy', 'ccl_simplesnappy', out_root),
                      'ccl_simplesnappy', SNAPPY_REPO, snappy_hash)
+    (out_root / VERSION_MODULE).write_text(
+        '# Written by tools/vendor_ccl.py; do not edit. The commits the bundled copies came from.\n'
+        f"CCL_CHROMIUM_READER_COMMIT = '{ccl_hash}'\n"
+        f"CCL_SIMPLESNAPPY_COMMIT = '{snappy_hash}'\n",
+        encoding='utf-8', newline='\n')
     return ccl_hash, snappy_hash
 
 
@@ -179,6 +188,10 @@ def check():
                 if expected.get(path) != actual.get(path):
                     state = 'missing' if path not in actual else 'added' if path not in expected else 'edited'
                     differences.append(f'{name}/{path} ({state})')
+        actual = LIB / VERSION_MODULE
+        expected = (fresh / VERSION_MODULE).read_bytes()
+        if not actual.exists() or actual.read_bytes().replace(b'\r\n', b'\n') != expected:
+            differences.append(f'{VERSION_MODULE} (does not name the commits in VENDORED.md)')
     if differences:
         print('The bundled copies differ from the commits in VENDORED.md:\n  ' + '\n  '.join(differences))
         print('Make the change in the fork and re-run this script on the new commit.')
