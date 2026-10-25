@@ -7,7 +7,7 @@ chrome_versions_for_schema in chrome.py maps a database's meta.version back to
 the Chrome versions listed here.
 """
 
-GENERATED = '2026-10-14'
+GENERATED = '2026-10-21'
 
 # {Chrome version: the tag its schema versions were read from}
 RELEASE_TAGS = {
@@ -160,13 +160,13 @@ RELEASE_TAGS = {
     149: '149.0.7827.238',
     150: '150.0.7871.256',
     151: '151.0.7922.226',
-    152: '152.0.7977.168',
+    152: '152.0.7977.169',
     153: '153.0.8010.57',
     154: '154.0.8037.154',
-    155: '155.0.8059.83',
-    156: '156.0.8078.40',
-    157: '157.0.8084.6',
-    158: '158.0.8104.1',
+    155: '155.0.8059.91',
+    156: '156.0.8078.52',
+    157: '157.0.8103.11',
+    158: '158.0.8110.5',
 }
 
 # {Chrome version: {database: schema version}}. A database is absent from Chrome
@@ -326,7 +326,7 @@ SCHEMA_VERSIONS = {
     154: {'History': 70, 'Web Data': 154, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
     155: {'History': 70, 'Web Data': 156, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
     156: {'History': 70, 'Web Data': 158, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
-    157: {'History': 70, 'Web Data': 159, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
+    157: {'History': 70, 'Web Data': 160, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
     158: {'History': 70, 'Web Data': 160, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
 }
 
