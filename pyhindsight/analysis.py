@@ -1193,9 +1193,9 @@ class AnalysisSession(object):
         else:
             self.display_version = "None"
 
-    # Collections every browser produces, folded by name. Chrome adds
-    # parsed_extension_data and parsed_sync_data; Firefox has neither, and a browser
-    # that grows one later needs no edit here.
+    # Lists folded from each browser analysis into the session, by attribute name.
+    # parsed_extension_data and parsed_sync_data are Chrome-only for now; a browser
+    # that doesn't have one is skipped.
     BROWSER_COLLECTIONS = (
         'parsed_artifacts',
         'parsed_storage',
@@ -1208,23 +1208,13 @@ class AnalysisSession(object):
     def absorb_browser_analysis(self, profile_path, browser_analysis):
         """Fold one finished browser analysis into this session.
 
-        The Chrome and Firefox branches of run() carried near-verbatim copies of
-        this, and the copies drifted: session_structure promotion existed only in
-        the Chrome branch, so when Firefox started producing one it rendered
-        nothing until the same seven lines were pasted across.
+        Collections are folded by attribute name rather than by branching on the
+        browser, so a collection one browser doesn't produce is simply skipped.
 
-        Everything optional is folded by attribute name rather than by branching on
-        the browser, so the difference between browsers stays in what they produce
-        instead of being restated here.
-
-        installed_extensions is deliberately *not* folded in. It is the one thing in
-        the two branches that is a genuine difference rather than duplication, and
-        moving it here is not behaviour-preserving: Firefox does produce an
-        installed_extensions block, it is simply never promoted, and promoting it
-        emits it through the Chrome shape -- a Firefox profile's add-ons appear as
-        "Chrome Extensions" with data_type chrome:extension:installed. Whether
-        Firefox extensions should reach the report, and under what labels, is a
-        separate question from removing this duplication.
+        Chrome's installed_extensions is promoted separately in run(). It carries no
+        'presentation', so the loop at the end of this method skips it. Firefox's
+        does carry one, so that loop already promotes it, and running Chrome's
+        promotion for Firefox as well would add each add-on twice.
         """
         for name in self.BROWSER_COLLECTIONS:
             values = getattr(browser_analysis, name, None)
@@ -1234,9 +1224,8 @@ class AnalysisSession(object):
         self.record_profile_results(profile_path, browser_analysis)
         self.display_version = browser_analysis.display_version
 
-        # hasattr, not a truthiness test: this is the promotion that had gone missing
-        # from the Firefox branch, and an empty-but-present structure should still be
-        # recorded for the profile it belongs to.
+        # hasattr, not a truthiness test: an empty structure is still recorded for the
+        # profile it belongs to.
         if hasattr(browser_analysis, 'session_structure'):
             if not hasattr(self, 'session_structures'):
                 self.session_structures = []
@@ -1346,10 +1335,9 @@ class AnalysisSession(object):
                 browser_analysis.process(api_keys=self.api_keys)
                 self.absorb_browser_analysis(found_profile_path, browser_analysis)
 
-                # Chrome-only, and outside the helper on purpose: installed_extensions
-                # carries no 'presentation' (the nested Extensions worksheet renders
-                # it), and Firefox's equivalent would come through this Chrome shape.
-                # See absorb_browser_analysis.
+                # installed_extensions carries no 'presentation' (the nested Extensions
+                # worksheet renders it), so absorb_browser_analysis() doesn't promote it.
+                # Firefox's does, which is why this stays in the Chrome branch.
                 browser_extensions = getattr(browser_analysis, 'installed_extensions', None)
                 if browser_extensions and browser_extensions.get('data'):
                     if not getattr(self, 'installed_extensions', None):
