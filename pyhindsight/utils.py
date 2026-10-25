@@ -450,6 +450,16 @@ def friendly_date(timestamp):
         return timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
+def describe_exception(e):
+    """Name an exception for a failure reason: 'TypeName: message', or 'TypeName'.
+
+    `str(e)` alone is blank for a bare `raise ValueError()`, which ccl does, and which
+    would leave a reason reading 'unexpected exception ()'.
+    """
+    message = str(e)
+    return f'{type(e).__name__}: {message}' if message else type(e).__name__
+
+
 def iterate_leveldb_records(ldb_records, unparsed):
     """Yield the raw records of a RawLevelDb, one file at a time, reporting damage.
 
@@ -466,9 +476,7 @@ def iterate_leveldb_records(ldb_records, unparsed):
         try:
             yield from ldb_file
         except (ValueError, IndexError, struct.error) as e:
-            # An exception object is always truthy, so test its text: ccl raises some
-            # with no message.
-            unparsed.source(ldb_file.path, f'damaged LevelDB data ({str(e) or type(e).__name__})')
+            unparsed.source(ldb_file.path, f'damaged LevelDB data ({describe_exception(e)})')
             continue
         damage = getattr(ldb_file, 'damage', None)
         if damage:
@@ -520,7 +528,7 @@ def get_ldb_records(ldb_path, unparsed, prefix=''):
                 cleaned_records.append(cleaned_record)
 
     except Exception as e:
-        unparsed.source(ldb_path, f'error reading LevelDB ({type(e).__name__}: {e})')
+        unparsed.source(ldb_path, f'error reading LevelDB ({describe_exception(e)})')
 
     db.close()
     return cleaned_records
