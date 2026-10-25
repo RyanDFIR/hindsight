@@ -117,8 +117,11 @@ def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     return None
 
 
-def iterate_cache_entries(profile):
+def iterate_cache_entries(profile, decompress=True):
     """Yield (key, entry, error) for a Chromium cache, one cache key at a time.
+
+    `decompress` is passed to ccl as `iterate_cache`'s is: with it False, each body is
+    left as it was sent, for a caller that decompresses it itself.
 
     ccl's `iterate_cache` is a single generator over the whole cache, and an entry is
     decoded inside it: a corrupt date, a short metadata buffer or a truncated data stream
@@ -137,7 +140,7 @@ def iterate_cache_entries(profile):
         return
     for key in cache.cache_keys():
         try:
-            entries = list(profile._yield_cache_record(key, True, False))
+            entries = list(profile._yield_cache_record(key, decompress, False))
         except Exception as e:
             yield key, None, e
             continue
@@ -3948,7 +3951,8 @@ class Chrome(WebBrowser):
             log.info(' - Cache path is empty')
             return 0
 
-        cache_items = iterate_cache_entries(profile)
+        # Decompressed below, to keep the MD5 of the body as sent for ETag checks.
+        cache_items = iterate_cache_entries(profile, decompress=False)
         source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
@@ -4014,13 +4018,22 @@ class Chrome(WebBrowser):
                     untimed_entries += 1
 
                 try:
+                    data, was_decompressed, encoded_md5 = cache_item.data, False, None
+                    if data is not None and metadata is not None:
+                        content_encoding = (metadata.get_attribute('content-encoding') or [''])[0]
+                        was_decompressed, data = ccl_chromium_reader.ChromiumProfileFolder._decompress_cache_data(
+                            data, content_encoding)
+                        if was_decompressed:
+                            encoded_md5 = hashlib.md5(cache_item.data, usedforsecurity=False).hexdigest()
+
                     parsed_item = WebBrowser.CacheItem(
                         profile=self.profile_path, url=cache_key.url,
                         request_time=utils.to_datetime(
                             metadata.request_time.replace(tzinfo=datetime.timezone.utc),
                             self.timezone) if metadata else None,
                         locations=describe_locations(cache_item),
-                        key=cache_key, metadata=metadata, data=cache_item.data, title=None)
+                        key=cache_key, metadata=metadata, data=data, title=None)
+                    parsed_item.encoded_md5 = encoded_md5
 
                     parsed_item.row_type = row_type
                     parsed_item.data_summary = parsed_item.create_data_summary()
@@ -4029,7 +4042,7 @@ class Chrome(WebBrowser):
                     parsed_item.last_modified = (metadata.get_attribute("last-modified") or [""])[0] if metadata else ''
                     # The body is already in memory (omit_cached_data=False), so this costs
                     # no extra reads.
-                    parsed_item.hash_body(cache_item.was_decompressed)
+                    parsed_item.hash_body(was_decompressed)
                 except Exception as e:
                     # One entry's bad value is that entry's problem, not the directory's.
                     unparsed.record(cache_key.url, f'cache entry could not be parsed ({utils.describe_exception(e)})')

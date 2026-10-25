@@ -1022,6 +1022,7 @@ class WebBrowser(object):
             self.etag = None
             self.last_modified = None
             self.body_sha256 = None
+            self.encoded_md5 = None  # MD5 of a compressed body as sent
             # Decoded from the ETag by AnalysisSession.apply_etag_analysis.
             self.etag_format = None
             self.etag_modified = None

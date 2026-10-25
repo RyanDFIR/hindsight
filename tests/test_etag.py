@@ -8,6 +8,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+import zlib
 import zoneinfo
 
 import openpyxl
@@ -70,6 +71,12 @@ class TestRealWorldETags(unittest.TestCase):
          'ASP.NET Core', utc(2026, 10, 22, 20, 45, 34), None),
         ('www.irs.gov', '"1792680962"', 'Thu, 22 Oct 2026 14:56:02 GMT', None,
          'Unix timestamp', utc(2026, 10, 22, 14, 56, 2), None),
+        ('www.sqlite.org (althttpd)', '"m67f42001s3153aa"', 'Mon, 07 Apr 2025 18:57:05 GMT', 3232682,
+         'althttpd (SQLite)', utc(2025, 4, 7, 18, 57, 5), 3232682),
+        ('www.7-zip.org', '"0x8DCBAC652C1AE4F"', 'Mon, 12 Aug 2024 12:00:13 GMT', 1624144,
+         'Azure Blob Storage', utc(2024, 8, 12, 12, 0, 13), None),
+        ('api.nuget.org', '0x8DB1FA95222F60F', 'Wed, 08 Mar 2023 07:47:09 GMT', 2441966,
+         'Azure Blob Storage', utc(2023, 3, 8, 7, 47, 9), None),
     ]
 
     def test_each_sample_decodes_and_agrees_with_its_own_headers(self):
@@ -93,11 +100,130 @@ class TestRealWorldETags(unittest.TestCase):
         self.assertIn('multipart upload in 6 parts; not an MD5 of the file', result.notes)
         self.assertIn('size consistent with 8 MiB parts', result.notes)
 
+    def test_s3_multipart_with_more_than_one_possible_part_size(self):
+        # rustup-init: 8 MiB parts, but 10 MiB parts would also make 3.
+        result = etag.analyze('"9301526a1b7e8fe8bcce054d2e0a861d-3"', size=21139856)
+        self.assertIn('size consistent with 8 or 10 MiB parts', result.notes)
+
     def test_md5(self):
         result = etag.analyze('"45b4cc5ffeb4ba28564a5872331d3d40"')  # nodejs.org
         self.assertEqual('MD5 hash', result.format)
         self.assertIsNone(result.modified)
         self.assertIsNone(result.size)
+
+    def test_qiniu(self):
+        # Live favicons; each hashes to its ETag.
+        for source, value, last_modified, size in (
+                ('www.qiniu.com', '"FsJyZYfBt-5Ve0VqMC4lKGTfRrGE"', 'Tue, 16 Aug 2022 07:04:11 GMT', 4286),
+                ('dn-qiniu-avatar.qbox.me', '"FpFnkhvBzQRlgso9L3SxyxrZvppT"',
+                 'Mon, 30 Mar 2015 14:34:04 GMT', 32988),
+                ('www.wangsu.com', '"FlPYJRi-se1kdokEJJORKD_4RFdU"', 'Sun, 09 Aug 2020 03:23:35 GMT', 4286)):
+            with self.subTest(source=source):
+                result = etag.analyze(value, last_modified, size)
+                self.assertEqual('Qiniu Kodo', result.format)
+                self.assertIsNone(result.modified)
+                self.assertEqual(['SHA-1 of the content; the file is 4 MiB or less'], result.notes)
+
+    def test_a_hash_shape_alone_is_not_named_as_a_hash(self):
+        # docs.aws.amazon.com is a SHA-1, learn.microsoft.com is not; GitHub avatars vary.
+        for value in ('"9ATiBeUUEYYreZx9C3jOaqQBVHo="', '"SSctglCkYMnDerQO6mEzUN5Gsrk="',
+                      '"2f6e95142316814ab3cebc6f656728bdc0315f23000c417222c763b8c49ea94d"'):
+            with self.subTest(etag=value):
+                self.assertEqual('Unrecognized', etag.analyze(value, reference_time=FETCHED).format)
+
+    def test_netlify_is_not_read_as_an_s3_part_count(self):
+        # Netlify; -ssl is not a part count.
+        for value in ('"e54964d35ed877151c08a3621b3d415a-ssl"',
+                      'W/"e0788bff0f1ad1cdca751fab8e3b85d4-ssl-df"'):
+            with self.subTest(etag=value):
+                self.assertEqual('Unrecognized', etag.analyze(value).format)
+
+    def test_a_long_0x_value_is_not_read_as_azure_ticks(self):
+        # download.visualstudio.microsoft.com; the file's SHA-256 is e38048c4...e58b.
+        result = etag.analyze('"0x8BC5ECAEE96421C22120ACD02B30807A560F31C892E13FC63EADECC3AC6B9C1A"',
+                              'Wed, 07 Oct 2026 05:02:07 GMT', 4475728, reference_time=FETCHED)
+        self.assertEqual('Microsoft Distribute (0x + 256 bits)', result.format)
+        self.assertIsNone(result.modified)
+        self.assertIsNone(result.size)
+        self.assertEqual(['not a time and not the file\'s SHA-256; compare the whole value with a '
+                          'later download of the same file'], result.notes)
+
+
+class TestAkamaiNetStorage(unittest.TestCase):
+    """JavaSetup8u351.exe is from magnet.ctf_2023; the rest were captured live."""
+
+    JAVA_SETUP = '"82bc7b7e2716e6a631952daa1be4037e:1668626955.19894"'
+    JAVA_SETUP_LAST_MODIFIED = 'Wed, 16 Nov 2022 19:00:10 GMT'
+
+    def test_the_download_record(self):
+        result = etag.analyze(self.JAVA_SETUP, self.JAVA_SETUP_LAST_MODIFIED, 2261648,
+                              reference_time=utc(2023, 1, 4, 0, 26, 39))
+        self.assertEqual('Akamai NetStorage-style', result.format)
+        self.assertFalse(result.weak)
+        # The suffix is 29 minutes after Last-Modified.
+        self.assertIsNone(result.modified)
+        self.assertIsNone(result.size)
+        self.assertEqual(['usually the MD5 of the content; compare with the MD5 of a recovered copy',
+                          'suffix 1668626955.19894 is not read as the modification time; as a '
+                          'Unix time it is 0:29:05 after Last-Modified'], result.notes)
+
+    def test_the_prefix_is_the_md5_of_the_body(self):
+        # download.oracle.com: the 64-byte body hashes to the prefix.
+        body = b'6deafad80454d1f968105b1f582d89b8c2e88a5dfc98116a8226e0ec2fd5df8e'
+        value = '"b670c22a9f59b6f8839abcb860d4bbe6:1792846992.069644"'
+        result = etag.analyze(value, 'Sat, 24 Oct 2026 12:41:06 GMT', len(body), body=body)
+        self.assertEqual('Akamai NetStorage-style', result.format)
+        self.assertIn('matches the MD5 of the cached body', result.notes)
+        self.assertIn('suffix 1792846992.069644 is not read as the modification time; as a '
+                      'Unix time it is 0:22:06 after Last-Modified', result.notes)
+        self.assertIn('does not match the MD5 of the cached body',
+                      etag.analyze(value, body=body[:-1]).notes)
+
+    def test_a_suffix_on_the_second_of_last_modified_is_still_not_the_time(self):
+        # www.salesforce.com
+        result = etag.analyze('"ccda8df05e9a37b3131afd4d451b44ec:1765795051.090913"',
+                              'Mon, 15 Dec 2025 10:37:31 GMT', 5430)
+        self.assertIsNone(result.modified)
+        self.assertIn('suffix 1765795051.090913 is not read as the modification time; as a '
+                      'Unix time it is the second of Last-Modified', result.notes)
+
+    def test_a_vendor_published_md5(self):
+        # VirtualBox 7.0.18: the prefix is the MD5 in Oracle's MD5SUMS.
+        result = etag.analyze('"6a046a57ca3dd222d8bf1410b8172f81:1714736344.35986"',
+                              'Thu, 02 May 2024 11:59:19 GMT', 109700144)
+        self.assertEqual('Akamai NetStorage-style', result.format)
+        self.assertIsNone(result.modified)
+        self.assertIn('suffix 1714736344.35986 is not read as the modification time; as a '
+                      'Unix time it is 23:39:45 after Last-Modified', result.notes)
+
+    def test_a_suffix_days_after_last_modified(self):
+        # yum.oracle.com/RPM-GPG-KEY-oracle-ol9
+        result = etag.analyze('"57d39f1538ab7dcd46f2c8662f55a96f:1657036179.196558"',
+                              'Wed, 29 Jun 2022 20:50:51 GMT', 6350)
+        self.assertIsNone(result.modified)
+        self.assertIn('suffix 1657036179.196558 is not read as the modification time; as a '
+                      'Unix time it is 5 days, 18:58:48 after Last-Modified', result.notes)
+
+    def test_without_last_modified(self):
+        result = etag.analyze('"402e7a087747cb56c718bde84651f96a:1367999472"')
+        self.assertEqual('Akamai NetStorage-style', result.format)
+        self.assertIn('suffix 1367999472 is not read as the modification time', result.notes)
+        self.assertFalse(any(note.startswith('not confirmed') for note in result.notes))
+
+    def test_weak_and_unquoted_values(self):
+        weak = etag.analyze('W/' + self.JAVA_SETUP)
+        self.assertEqual('Akamai NetStorage-style', weak.format)
+        self.assertTrue(weak.weak)
+        self.assertEqual('Akamai NetStorage-style', etag.analyze(self.JAVA_SETUP.strip('"')).format)
+
+    def test_near_misses_are_not_claimed(self):
+        for value in ('"82bc7b7e2716e6a631952daa1be4037e:1668626955.1.2"',
+                      '"82bc7b7e2716e6a631952daa1be4037:1668626955"',
+                      '"82bc7b7e2716e6a631952daa1be4037e:"',
+                      '"82bc7b7e2716e6a631952daa1be4037e:-1668626955"',
+                      '"82bc7b7e2716e6a631952daa1be4037e:0x63753d0b"'):
+            with self.subTest(etag=value):
+                self.assertEqual('Unrecognized', etag.analyze(value).format)
 
 
 class TestCorpusFindings(unittest.TestCase):
@@ -129,12 +255,25 @@ class TestCorpusFindings(unittest.TestCase):
         self.assertIn('does not match the MD5 of the cached body (decoded from gzip; the ETag '
                       'may describe the compressed bytes)', result.notes)
 
+    def test_a_precompressed_file_matches_the_md5_of_the_bytes_as_sent(self):
+        # The ETag of a precompressed file is the MD5 of the compressed bytes.
+        decoded, sent = b'hello', b'\x0b\x02\x80hello\x03'
+        value = hashlib.md5(sent).hexdigest()
+        result = etag.analyze(value, body=decoded, content_encoding='br',
+                              encoded_md5=hashlib.md5(sent).hexdigest())
+        self.assertIn('matches the MD5 of the cached body as sent (br-compressed)', result.notes)
+        self.assertIn('does not match the MD5 of the cached body (decoded from br; the ETag '
+                      'may describe the compressed bytes)',
+                      etag.analyze(value, body=decoded, content_encoding='br').notes)
+
     def test_upper_case_filetime(self):
         # www.montereybayaquarium.org (Optimizely CMS); every one matched Last-Modified.
         result = etag.analyze('"1DA771657FC7680"', 'Fri, 15 Mar 2024 20:21:21 GMT')
         self.assertEqual('.NET (FILETIME)', result.format)
         self.assertEqual(utc(2024, 3, 15, 20, 21, 21), result.modified.replace(microsecond=0))
-        self.assertEqual('Unrecognized', etag.analyze('"1DA771657FC7680"').format)
+        unconfirmed = etag.analyze('"1DA771657FC7680"')
+        self.assertEqual('.NET (FILETIME) (unconfirmed)', unconfirmed.format)
+        self.assertIsNone(unconfirmed.modified)
 
 
 class TestDecoding(unittest.TestCase):
@@ -186,11 +325,30 @@ class TestDecoding(unittest.TestCase):
         self.assertEqual('nginx', result.format)
         self.assertIn('time is 2:00:00 before Last-Modified', result.notes)
 
-    def test_shapes_that_need_last_modified_are_not_reported_without_it(self):
-        # Fifteen hex digits or ten decimal ones are common enough to match by chance.
+    def test_shapes_that_need_last_modified_are_only_a_reading_without_it(self):
+        # Common enough to match by chance, so only a reading without Last-Modified.
+        for value, fmt, reading in (
+                ('"1dd626648e2d1ee"', 'ASP.NET Core (unconfirmed)', '2026-10-22 20:45:34 UTC'),
+                ('"1792680962"', 'Unix timestamp (unconfirmed)', '2026-10-22 14:56:02 UTC'),
+                # i.ytimg.com
+                ('"1749462010"', 'Unix timestamp (unconfirmed)', '2025-06-09 09:40:10 UTC')):
+            with self.subTest(etag=value):
+                result = etag.analyze(value, size=15086)
+                self.assertEqual(fmt, result.format)
+                self.assertIsNone(result.modified)
+                self.assertEqual([f'reads as {reading}; not confirmed: no Last-Modified to '
+                                  f'check against'], result.notes)
+
+    def test_shapes_that_last_modified_contradicts_are_dropped(self):
         for value in ('"1dd626648e2d1ee"', '"1792680962"'):
             with self.subTest(etag=value):
-                self.assertEqual('Unrecognized', etag.analyze(value, size=15086).format)
+                self.assertEqual('Unrecognized',
+                                 etag.analyze(value, 'Mon, 01 Jan 2024 00:00:00 GMT', 15086).format)
+
+    def test_values_that_do_not_read_as_a_plausible_time_stay_unrecognized(self):
+        for value in ('"26177639"', '"4710585"', '8390199704425924230', '"9999999999"'):
+            with self.subTest(etag=value):
+                self.assertEqual('Unrecognized', etag.analyze(value, reference_time=FETCHED).format)
 
     def test_the_gap_before_the_download_is_reported(self):
         result = etag.analyze('"6ac46e19-13e7f8"', reference_time=utc(2026, 10, 7, 3, 42, 17))
@@ -263,6 +421,53 @@ class TestDecoding(unittest.TestCase):
                       etag.analyze(value, body=b'hello').notes)
         self.assertIn('does not match the MD5 of the cached body',
                       etag.analyze(value, body=b'jello').notes)
+
+    def test_werkzeug(self):
+        # Werkzeug 2.x send_file; 3.x drops the checksum.
+        path = b'/srv/app/static/report.pdf'
+        check = zlib.adler32(path)
+        for value, notes in ((f'"1718794392.4765725-1874910-{check}"',
+                              [f'adler32 of the file\'s path on the server {check}']),
+                             ('"1718794392.4765725-1874910"', [])):
+            with self.subTest(etag=value):
+                result = etag.analyze(value, 'Wed, 19 Jun 2024 10:53:12 GMT', 1874910)
+                self.assertEqual('Werkzeug (Flask)', result.format)
+                self.assertEqual(datetime.datetime(2024, 6, 19, 10, 53, 12, 476572, tzinfo=UTC),
+                                 result.modified)
+                self.assertEqual(1874910, result.size)
+                self.assertEqual(notes + ['time matches Last-Modified', 'size matches total bytes'],
+                                 result.notes)
+
+    def test_a_reproducible_build_time_is_accepted_when_last_modified_agrees(self):
+        # Reproducible builds stamp files 1980-01-01.
+        value = f'W/"1bacd64-{315532801000:x}"'  # Express: size, mtime in milliseconds
+        result = etag.analyze(value, 'Tue, 01 Jan 1980 00:00:01 GMT', 29019492)
+        self.assertEqual('Express (Node.js)', result.format)
+        self.assertEqual(utc(1980, 1, 1, 0, 0, 1), result.modified)
+        self.assertIn('time matches Last-Modified', result.notes)
+        self.assertEqual('Unrecognized', etag.analyze(value, size=29019492).format)
+        self.assertEqual('Unrecognized',
+                         etag.analyze(value, 'Tue, 01 Jan 1980 00:00:05 GMT', 29019492).format)
+
+    def test_qiniu_is_checked_against_a_cached_body(self):
+        def qetag(prefix, digest):
+            return '"' + base64.urlsafe_b64encode(prefix + digest).decode() + '"'
+
+        small = b'hello'
+        value = qetag(b'\x16', hashlib.sha1(small).digest())
+        self.assertIn('matches the cached body', etag.analyze(value, body=small).notes)
+        self.assertIn('does not match the cached body', etag.analyze(value, body=b'jello').notes)
+
+        # Over 4 MiB, the SHA-1 is of the blocks' SHA-1s.
+        block = 4 * 1024 * 1024
+        large = b'a' * block + b'b'
+        value = qetag(b'\x96', hashlib.sha1(hashlib.sha1(large[:block]).digest()
+                                            + hashlib.sha1(large[block:]).digest()).digest())
+        result = etag.analyze(value, size=len(large), body=large)
+        self.assertIn('SHA-1 of the 4 MiB blocks\' SHA-1s; the file is over 4 MiB', result.notes)
+        self.assertIn('matches the cached body', result.notes)
+        self.assertIn('the recorded size is on the other side of 4 MiB',
+                      etag.analyze(value, size=len(small)).notes)
 
     def test_malformed_values_do_not_raise(self):
         for value in ('W/', '"', '""', 'W/""', '0x', '0xFFFFFFFFFFFFFFFF', 'f' * 16 + ':0',
@@ -360,6 +565,22 @@ class TestSessionAnalysis(unittest.TestCase):
                 self.assertEqual(1304568, item.etag_size)
                 self.assertIn(note, item.etag_notes)
                 self.assertNotIn('size differs', item.etag_notes)
+
+    def test_a_compressed_cache_body_is_also_checked_as_sent(self):
+        class Metadata:
+            def get_attribute(self, name):
+                return {'content-encoding': ['br'], 'content-length': ['12']}.get(name, [])
+
+        decoded, sent = b'hello', b'\x0b\x02\x80hello\x03'
+        item = WebBrowser.CacheItem('Default', 'https://example.test/a.js', None, FETCHED,
+                                    'locations', 'key', Metadata(), decoded)
+        item.row_type = 'cache'
+        item.etag = f'"{hashlib.md5(sent).hexdigest()}"'
+        item.body_sha256 = hashlib.sha256(decoded).hexdigest()
+        item.encoded_md5 = hashlib.md5(sent).hexdigest()
+        _session([item]).apply_etag_analysis()
+        self.assertEqual('MD5 hash', item.etag_format)
+        self.assertIn('matches the MD5 of the cached body as sent (br-compressed)', item.etag_notes)
 
     def test_items_without_an_etag_are_left_alone(self):
         item = _download(etag=None)

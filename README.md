@@ -93,9 +93,10 @@ the `ETag Decoded` column of the XLSX Timeline, and in the separate `etag_format
 `etag_modified`, `etag_size` and `etag_notes` fields of the SQLite and JSONL output.
 
 Recognized formats are nginx, Apache httpd, IIS, ASP.NET Core, Azure Blob Storage (which
-also serves GitHub release downloads), Express, Tomcat, and the MD5 and multipart ETags
-of Amazon S3. Each decode is checked against the Last-Modified header and the byte count
-stored with the same response, and the notes say which of those agreed. A decoded value
+also serves GitHub release downloads), Express, Tomcat, Werkzeug, althttpd, Akamai
+NetStorage, Qiniu, and the MD5 and multipart ETags of Amazon S3. Each decode is checked
+against the Last-Modified header and the byte count stored with the same response, and
+the notes say which of those agreed. A decoded value
 is still what the server claimed: it is strong corroboration where it agrees with them,
 not a substitute for hashing a recovered file.
 
