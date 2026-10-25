@@ -2164,15 +2164,17 @@ class Chrome(WebBrowser):
                         obj_store = database.get_object_store_by_name(obj_store_name)
                         # Records this object store yielded, kept or not. `results` spans
                         # every store read so far, so it cannot say how far this one got.
+                        # A record is counted once it is dealt with, so one whose own
+                        # handling raises is not counted as read before the failure.
                         obj_store_records = 0
                         try:
                             for record in obj_store.iterate_records():
-                                obj_store_records += 1
                                 # Past the cap a record is counted, not kept. Reading on to
                                 # the end of the store is what lets the report say exactly
                                 # how many were left out.
                                 if store_budget is not None and store_records >= store_budget:
                                     store_records_over_cap += 1
+                                    obj_store_records += 1
                                     continue
                                 store_records += 1
 
@@ -2205,6 +2207,7 @@ class Chrome(WebBrowser):
                                     object_store=obj_store_name, key_type=key_type,
                                     key_raw=raw_key.hex() if isinstance(raw_key, (bytes, bytearray)) else None,
                                     value_obj=record_value))
+                                obj_store_records += 1
                         except FileNotFoundError as e:
                             unparsed.source(database, f'file not found ({e})')
 
