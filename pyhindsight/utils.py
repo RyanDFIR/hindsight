@@ -450,9 +450,41 @@ def friendly_date(timestamp):
         return timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
-def get_ldb_records(ldb_path, prefix=''):
+def iterate_leveldb_records(ldb_records, unparsed):
+    """Yield the raw records of a RawLevelDb, one file at a time, reporting damage.
+
+    ccl_leveldb skips damage in a .log file and reads on, as LevelDB does, listing
+    each skip in the file's `damage`; a file with any is reported as an unparsed
+    source after its readable records are yielded. Zero-filled space, which Chrome
+    leaves at the end of a .log file after an abrupt shutdown, holds no records and
+    is not damage. A table (.ldb) file can still raise, and raised from
+    RawLevelDb.iterate_records_raw() that would end the run; instead the records
+    read before it are kept, the file is reported, and the remaining files are read.
+    """
+    # Same order as RawLevelDb.iterate_records_raw(), which offers no per-file hook.
+    for ldb_file in sorted(ldb_records._files, key=lambda f: f.file_no):
+        try:
+            yield from ldb_file
+        except (ValueError, IndexError, struct.error) as e:
+            # An exception object is always truthy, so test its text: ccl raises some
+            # with no message.
+            unparsed.source(ldb_file.path, f'damaged LevelDB data ({str(e) or type(e).__name__})')
+            continue
+        damage = getattr(ldb_file, 'damage', None)
+        if damage:
+            skipped = sum(d.length for d in damage)
+            unparsed.source(ldb_file.path, f'damaged LevelDB data ({skipped} bytes skipped in '
+                                           f'{len(damage)} place{"s" if len(damage) > 1 else ""}; '
+                                           f'first at offset {damage[0].offset}: {damage[0].reason})')
+
+
+def get_ldb_records(ldb_path, unparsed, prefix=''):
     """Open a LevelDB at given path and return a list of records, optionally
-    filtered by a prefix string. Key and value are kept as byte strings."""
+    filtered by a prefix string. Key and value are kept as byte strings.
+
+    A LevelDB that cannot be opened, and a file in it that is damaged, is reported to
+    `unparsed` (a ParseFailures), so the artifact shows as partial rather than as a
+    clean read of fewer records."""
 
     try:
         from pyhindsight.lib.ccl_chromium_reader.storage_formats import ccl_leveldb
@@ -468,13 +500,13 @@ def get_ldb_records(ldb_path, prefix=''):
     try:
         db = ccl_leveldb.RawLevelDb(ldb_path)
     except Exception as e:
-        log.warning(f' - Could not open {ldb_path} as LevelDB; {e}')
+        unparsed.source(ldb_path, f'could not open as LevelDB ({e})')
         return []
 
     cleaned_records = []
 
     try:
-        for record in db.iterate_records_raw():
+        for record in iterate_leveldb_records(db, unparsed):
             cleaned_record = record.__dict__
 
             if record.file_type.name == 'Ldb':
@@ -487,11 +519,8 @@ def get_ldb_records(ldb_path, prefix=''):
 
                 cleaned_records.append(cleaned_record)
 
-    except ValueError:
-        log.warning(' - Exception reading LevelDB: ValueError')
-
     except Exception as e:
-        log.warning(f' - Exception reading LevelDB: {e}')
+        unparsed.source(ldb_path, f'error reading LevelDB ({type(e).__name__}: {e})')
 
     db.close()
     return cleaned_records

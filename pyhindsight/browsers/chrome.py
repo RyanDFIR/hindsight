@@ -70,27 +70,6 @@ SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
 
 
-def iterate_leveldb_records(ldb_records, unparsed):
-    """Yield the raw records of a RawLevelDb, one file at a time.
-
-    ccl_leveldb raises ValueError when a file holds a block it does not expect, such as
-    the zero-filled tail of a .log file left by an abrupt shutdown, which LevelDB itself
-    skips. A write batch cut short raises IndexError or struct.error instead, when it
-    claims more entries than it holds or is shorter than its 12-byte header. Raised from
-    RawLevelDb.iterate_records_raw(), any of these would end the whole run. Instead, the
-    records read before the damaged block are kept, the file is reported as an unparsed
-    source, and the remaining files are still read.
-    """
-    # Same order as RawLevelDb.iterate_records_raw(), which offers no per-file hook.
-    for ldb_file in sorted(ldb_records._files, key=lambda f: f.file_no):
-        try:
-            yield from ldb_file
-        except (ValueError, IndexError, struct.error) as e:
-            # ccl raises a bare ValueError() for an unknown block type, which has no
-            # message; an exception object is always truthy, so test its text.
-            unparsed.source(ldb_file.path, f'damaged LevelDB data ({str(e) or "unexpected block"})')
-
-
 def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
 
@@ -877,7 +856,7 @@ class Chrome(WebBrowser):
         # rewrites a download's entry as it progresses, so earlier records are partial
         # snapshots (empty target path, no end time, etc.).
         latest_by_guid = {}
-        for record in iterate_leveldb_records(ldb_records, unparsed):
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             if record.state.name != 'Live':
                 continue
             if not record.user_key.startswith(b'21_'):
@@ -1431,7 +1410,7 @@ class Chrome(WebBrowser):
         if 'leveldb' in local_storage_listing:
             log.debug(' - Found "leveldb" directory; reading Local Storage LevelDB records')
             ls_ldb_path = os.path.join(ls_path, 'leveldb')
-            ls_ldb_records = utils.get_ldb_records(ls_ldb_path)
+            ls_ldb_records = utils.get_ldb_records(ls_ldb_path, unparsed)
             log.debug(f' - Reading {len(ls_ldb_records)} Local Storage raw LevelDB records; beginning parsing')
             for record in ls_ldb_records:
                 ls_item = self.parse_ls_ldb_record(record)
@@ -3367,7 +3346,7 @@ class Chrome(WebBrowser):
         # fetched from and to verify on-disk bytes against the LDB-recorded hash.
         resource_to_record = {}
 
-        for record in iterate_leveldb_records(ldb_records, unparsed):
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             key = record.user_key
             if key.startswith(b'REG:'):
                 nul_pos = key.rfind(b'\x00')
@@ -3424,7 +3403,7 @@ class Chrome(WebBrowser):
         user_data_count = 0
 
         try:
-            for record in iterate_leveldb_records(ldb_records, unparsed):
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 key = record.user_key
 
                 if key.startswith(b'REG:'):
@@ -4048,7 +4027,7 @@ class Chrome(WebBrowser):
         dynamic_scripts_all = []    # [(ext_id, seq, state, value)] -- every recoverable record
 
         if ldb_records:
-            for record in iterate_leveldb_records(ldb_records, unparsed):
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 user_key = record.user_key.decode()
                 ext_id = None
                 ext_name = ""
@@ -4356,7 +4335,7 @@ class Chrome(WebBrowser):
                 unparsed.source(ldb_path, f'possible LevelDB corruption ({e})')
 
             if ldb_records:
-                for record in iterate_leveldb_records(ldb_records, unparsed):
+                for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                     user_key = record.user_key.decode()
                     parsed = Chrome.ExtensionStorageItem(
                         profile=self.profile_path, extension_id=ext_id, extension_name=self.get_extension_name_from_id(ext_id), key=user_key, value=record.value.decode(),
@@ -4537,7 +4516,7 @@ class Chrome(WebBrowser):
         # web origin (https_www.google.com_0)
         if 'Origins' in fs_root_listing:
             ldb_path = os.path.join(fs_root_path, 'Origins')
-            origins = utils.get_ldb_records(ldb_path, 'ORIGIN:')
+            origins = utils.get_ldb_records(ldb_path, unparsed, 'ORIGIN:')
             for origin in origins:
                 origin_domain = origin['key'].decode()
                 origin_id = origin['value'].decode()
@@ -4578,7 +4557,7 @@ class Chrome(WebBrowser):
                     # // where FileInfo has |parent_id|, |data_path|, |name| and |modification_time|
                     # from cs.chromium.org/chromium/src/storage/browser/file_system/sandbox_directory_database.cc
 
-                    path_items = utils.get_ldb_records(fs_paths_path)
+                    path_items = utils.get_ldb_records(fs_paths_path, unparsed)
 
                     # Loop over records looking for "file_id" records to build backing_files dict. We skip
                     # deleted records here, as deleted "file_id" records aren't useful. We'll loop over this
@@ -4720,6 +4699,7 @@ class Chrome(WebBrowser):
 
     def get_site_characteristics(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Site Characteristics')
 
         self.build_md5_hash_list_of_origins()
 
@@ -4737,7 +4717,7 @@ class Chrome(WebBrowser):
 
         source_item = utils.relpath(sc_root_path, self.profile_path)
 
-        items = utils.get_ldb_records(sc_root_path)
+        items = utils.get_ldb_records(sc_root_path, unparsed)
         for item in items:
             try:
                 from pyhindsight.lib.proto.components.performance_manager.persistence.site_data.site_data_pb2 import SiteDataProto
@@ -4793,10 +4773,11 @@ class Chrome(WebBrowser):
                 log.exception(f' - Exception parsing SiteDataProto ({item}): {e}')
 
         self.parsed_artifacts.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def get_sync_data(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Sync Data')
 
         log.info('Sync Data:')
         sync_data_root_path = os.path.join(path, dir_name)
@@ -4815,7 +4796,7 @@ class Chrome(WebBrowser):
 
         log.info(f' - Reading from {sync_data_root_path}')
 
-        items = utils.get_ldb_records(sync_data_root_path)
+        items = utils.get_ldb_records(sync_data_root_path, unparsed)
 
         from pyhindsight.lib.proto.components.sync.protocol.device_info_specifics_pb2 import DeviceInfoSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.session_specifics_pb2 import SessionSpecifics
@@ -4937,7 +4918,7 @@ class Chrome(WebBrowser):
             result_list.append(sync_record)
 
         self.parsed_sync_data.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def build_hsts_domain_hashes(self):
         domains = self.get_clean_hostnames()
