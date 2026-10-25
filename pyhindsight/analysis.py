@@ -3446,6 +3446,15 @@ class AnalysisSession(object):
                     return pref_item.get(field_name)
                 return getattr(pref_item, field_name, None)
 
+            def preference_cell(value):
+                # Some preference values are dicts or lists (an account's
+                # accountcapability_overrides, a policy object), which sqlite3 cannot bind:
+                # one used to fail the whole SQLite output. Stored as JSON, as the
+                # Preferences sheet renders them.
+                if isinstance(value, (dict, list)):
+                    return json.dumps(value, sort_keys=True, default=str)
+                return value
+
             def is_empty(value):
                 return value is None or value == ''
 
@@ -3718,7 +3727,8 @@ class AnalysisSession(object):
                     c.execute(
                         'INSERT INTO preferences (group_name, name, value, description, title) '
                         'VALUES (?, ?, ?, ?, ?)',
-                        (group_value, name_value, value_value, description_value, title))
+                        (group_value, name_value, preference_cell(value_value),
+                         preference_cell(description_value), title))
 
         output_db.close()
 
