@@ -102,6 +102,17 @@ class TestCommandLineRuns(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn('Unknown artifact', result.stdout + result.stderr)
 
+    def test_an_input_path_that_cannot_be_read_fails_without_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a_file = os.path.join(tmp, 'not-a-directory')
+            open(a_file, 'w').close()
+            for name, path in (('missing', os.path.join(tmp, 'not-there')), ('a file', a_file)):
+                with self.subTest(name):
+                    result = run_hindsight('-f', 'jsonl', output_dir=tmp, profile=path)
+                    self.assertEqual(2, result.returncode, result.stderr)
+                    self.assertNotIn('Traceback', result.stdout + result.stderr)
+                    self.assertIn(f'cannot read the input directory "{path}"', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

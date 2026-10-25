@@ -147,6 +147,14 @@ The Chrome Profile folder default locations are:
     except UnknownArtifactError as e:
         parser.error(str(e))
 
+    # main() searches the input for profiles before the run starts, to show the count,
+    # and a path that is missing, is a file, or can't be read raised from os.listdir()
+    # as a bare traceback. run() reports the same failure cleanly, but too late.
+    try:
+        os.listdir(args.input)
+    except OSError as e:
+        parser.error(f'cannot read the input directory "{args.input}": {e.strerror or e}')
+
     # Convert any relative paths to absolute using base directory
     base_dir = get_base_dir()
     if not os.path.isabs(args.log):
