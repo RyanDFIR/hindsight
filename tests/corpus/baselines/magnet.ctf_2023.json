@@ -21,13 +21,14 @@
     "chrome:session:navigation": 812,
     "chrome:session:tab_closed": 5,
     "chrome:session:tab_last_active": 25,
+    "chrome:session:window": 7,
     "chrome:session:window_closed": 1,
     "chrome:session_storage:entry": 756,
     "chrome:site_setting:entry": 665,
     "chrome:sync_data:entry": 1732
   },
   "generated_by": {
-    "generated_utc": "2026-10-25T17:45:19Z",
+    "generated_utc": "2026-10-25T20:25:44Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -688,5 +689,5 @@
     }
   },
   "root": "magnet.ctf_2023",
-  "total_records": 38632
+  "total_records": 38639
 }

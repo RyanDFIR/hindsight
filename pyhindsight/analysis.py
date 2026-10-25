@@ -3374,7 +3374,24 @@ class AnalysisSession(object):
                 'body_sha256 TEXT, '
                 # Decoded from `etag` by Hindsight (see pyhindsight/lib/etag.py); appended
                 # rather than placed beside it so existing column positions are unchanged.
-                'etag_format TEXT, etag_modified TEXT, etag_size INT, etag_notes TEXT)')
+                'etag_format TEXT, etag_modified TEXT, etag_size INT, etag_notes TEXT, '
+                # The tab and window a visit (from context_annotations) or session row
+                # belongs to, appended for the same reason. TEXT because Firefox's are
+                # labels Hindsight assigns ('w0', 'w0.t1') where Chrome's are numbers.
+                # session_id is the session row's own tab (or, for a window event, window).
+                'tab_id TEXT, window_id TEXT, session_id TEXT)')
+
+            # The windows open when the browser last saved its session, and their tabs in
+            # order: the structure behind the Sessions sheet, matching the JSONL
+            # :session:window records. window_id matches the timeline's window_id.
+            c.execute(
+                'CREATE TABLE session_windows(profile TEXT, browser TEXT, window_id TEXT, timestamp TEXT, '
+                'window_type TEXT, window_state TEXT, x INT, y INT, width INT, height INT, app_name TEXT, '
+                'active BOOL, selected_tab_index INT, tab_count INT)')
+            c.execute(
+                'CREATE TABLE session_tabs(profile TEXT, window_id TEXT, tab_id TEXT, tab_index INT, '
+                'selected BOOL, pinned BOOL, tab_group TEXT, extension_app_id TEXT, user_agent_override TEXT, '
+                'selected_nav_index INT, navigation_count INT, url TEXT, title TEXT)')
 
             c.execute(
                 'CREATE TABLE storage(type TEXT, origin TEXT, key TEXT, value TEXT, '
@@ -3483,12 +3500,12 @@ class AnalysisSession(object):
                     c.execute(
                         'INSERT INTO timeline (type, timestamp, url, title, interpretation, profile, source_item, '
                         'visit_source, visit_id, from_visit, opener_visit, visit_duration, visit_count, typed_count, '
-                        'url_hidden, transition) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'url_hidden, transition, tab_id, window_id) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.interpretation,
                          item.profile, item.source_item, item.visit_source, item.visit_id, item.from_visit,
                          item.opener_visit, item.visit_duration, item.visit_count, item.typed_count, item.hidden,
-                         item.transition_friendly))
+                         item.transition_friendly, getattr(item, 'tab_id', None), getattr(item, 'window_id', None)))
 
                 elif item.row_type.startswith('media'):
                     if item.source_title:
@@ -3572,6 +3589,15 @@ class AnalysisSession(object):
                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                         (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
                          item.interpretation, item.profile, item.source_item))
+
+                elif item.row_type.startswith('session ('):
+                    c.execute(
+                        'INSERT INTO timeline (type, timestamp, url, title, value, interpretation, profile, source_item, '
+                        'window_id, session_id) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (item.row_type, sql_date(friendly_date(item.timestamp)), item.url, item.name, item.value,
+                         item.interpretation, item.profile, item.source_item,
+                         getattr(item, 'window_id', None), getattr(item, 'session_id', None)))
 
                 elif item.row_type.startswith(('preference', 'site setting', 'notification', 'session',
                                                'permission action', 'profile creation', 'extension')):
@@ -3720,6 +3746,33 @@ class AnalysisSession(object):
                         'VALUES (?, ?, ?, ?, ?)',
                         (group_value, name_value, value_value, description_value, title))
 
+            for window in self.session_window_records():
+                rect = window.get('window_rect') or {}
+                c.execute(
+                    'INSERT INTO session_windows (profile, browser, window_id, timestamp, window_type, '
+                    'window_state, x, y, width, height, app_name, active, selected_tab_index, tab_count) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (window.get('profile'), window['source_long'].split(' ')[0], window['window_id'],
+                     # Written like the timeline's times; NULL rather than the epoch when no
+                     # navigation dates the window.
+                     sql_date(friendly_date(datetime.datetime.fromisoformat(window['datetime'])))
+                     if window['timestamp_desc'] != 'Not a time' else None,
+                     window.get('window_type'), window.get('window_state'),
+                     rect.get('x'), rect.get('y'), rect.get('width'), rect.get('height'),
+                     window.get('app_name'), window.get('active'), window.get('selected_tab_index'),
+                     window.get('tab_count')))
+                for tab in window.get('tabs', []):
+                    c.execute(
+                        'INSERT INTO session_tabs (profile, window_id, tab_id, tab_index, selected, pinned, '
+                        'tab_group, extension_app_id, user_agent_override, selected_nav_index, '
+                        'navigation_count, url, title) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (window.get('profile'), window['window_id'], tab['tab_id'], tab.get('index'),
+                         tab.get('selected'), tab.get('pinned'), tab.get('group'),
+                         tab.get('extension_app_id'), tab.get('user_agent_override'),
+                         tab.get('selected_nav_index'), tab.get('navigation_count'),
+                         tab.get('url'), tab.get('title')))
+
         output_db.close()
 
     def generate_jsonl(self, output_file):
@@ -3793,6 +3846,8 @@ class AnalysisSession(object):
             if installed_extensions and installed_extensions.get('data'):
                 for extension in installed_extensions['data']:
                     write_jsonl_record(extension)
+            for window_record in self.session_window_records():
+                write_jsonl_record(window_record)
             if unparsed_count:
                 log.error(
                     f'{unparsed_count} record(s) could not be written to JSONL and are '
@@ -3800,3 +3855,77 @@ class AnalysisSession(object):
                     f'them, which it should no longer do for any class:')
                 for name, count in unparsed_types.most_common():
                     log.error(f'  - {count} x {name}')
+
+    def session_window_records(self):
+        """One JSONL record per window in each profile's session structure.
+
+        The Sessions sheet is built from this structure, but until now none of it reached
+        JSONL: the windows open when the browser last saved its session, their size,
+        position and state, and which tabs each holds in what order. Session rows carry
+        a window_id that matches these records.
+        """
+        for session in getattr(self, 'session_structures', None) or []:
+            browser = session.get('browser', 'Chrome')
+            prefix = browser.lower()
+            tabs = session.get('tabs', {})
+            tab_groups = session.get('tab_groups', {})
+            tab_current_urls = session.get('tab_current_urls', {})
+            tab_nav_stacks = session.get('tab_nav_stacks', {})
+            active_window = session.get('active_window')
+
+            for window_id, win in session.get('windows', {}).items():
+                window_tabs = sorted(
+                    ((tid, t) for tid, t in tabs.items() if t.get('window_id') == window_id),
+                    key=lambda x: (x[1].get('index') is None, x[1].get('index') or 0))
+                selected_tab_index = win.get('selected_tab_index')
+
+                tab_records = []
+                latest = None
+                for tab_id, tab in window_tabs:
+                    url, title = tab_current_urls.get(tab_id, ('', ''))
+                    stack = tab_nav_stacks.get(tab_id, {})
+                    for _, _, when in stack.values():
+                        if isinstance(when, datetime.datetime) and (latest is None or when > latest):
+                            latest = when
+                    group = tab_groups.get(tab.get('group_token'), {}).get('title') if tab.get('group_token') else None
+                    tab_record = {
+                        'tab_id': tab_id,
+                        'index': tab.get('index'),
+                        'selected': tab.get('index') is not None and tab.get('index') == selected_tab_index,
+                        'pinned': bool(tab.get('pinned')),
+                        'group': group,
+                        'extension_app_id': tab.get('extension_app_id'),
+                        'user_agent_override': tab.get('user_agent_override'),
+                        'selected_nav_index': tab.get('selected_nav_index'),
+                        'navigation_count': len(stack),
+                        'url': url or None,
+                        'title': title or None,
+                    }
+                    tab_records.append({k: v for k, v in tab_record.items() if v is not None})
+
+                active = window_id == active_window
+                summary = ' | '.join(part for part in (
+                    win.get('type'), win.get('show_state'), win.get('bounds')) if part)
+                record = {
+                    'source_short': 'WEBHIST',
+                    'source_long': f'{browser} Sessions',
+                    'parser': f'hindsight/{__version__}',
+                    'profile': session.get('profile'),
+                    'data_type': f'{prefix}:session:window',
+                    # A window has no time of its own; its latest navigation says when it
+                    # was last known to be in use.
+                    'timestamp_desc': 'Last Navigation Time' if latest else 'Not a time',
+                    'datetime': latest.isoformat() if latest else '1970-01-01T00:00:00.000000+00:00',
+                    'window_id': window_id,
+                    'window_type': win.get('type'),
+                    'window_state': win.get('show_state'),
+                    'window_rect': win.get('rect'),
+                    'app_name': win.get('app_name'),
+                    'active': active,
+                    'selected_tab_index': selected_tab_index,
+                    'tab_count': len(tab_records),
+                    'tabs': tab_records,
+                    'message': f'Window {window_id}: {summary}, {len(tab_records)} '
+                               f'tab{"" if len(tab_records) == 1 else "s"}{" [Active]" if active else ""}',
+                }
+                yield {k: v for k, v in record.items() if v is not None}

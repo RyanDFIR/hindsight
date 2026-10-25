@@ -1644,6 +1644,7 @@ class Chrome(WebBrowser):
                             x, y, w, h, state = struct.unpack('<iiiii', p[4:24])
                             win = session_windows.setdefault(window_id, {})
                             win['bounds'] = f'{w}x{h} at ({x},{y})'
+                            win['rect'] = {'x': x, 'y': y, 'width': w, 'height': h}
                             win['show_state'] = WINDOW_SHOW_STATES.get(state, str(state))
 
                         elif cmd_id == 15:                    # SetWindowAppName (pickle): window_id, app_name
@@ -1999,6 +2000,11 @@ class Chrome(WebBrowser):
                                     item.session_id = window_id
                                     item.row_type = 'session (closed window)'
                                     item.value = ' | '.join(value_parts)
+                                    # The same facts as fields, so JSONL readers need not parse value.
+                                    item.window_rect = {'x': x, 'y': y, 'width': w, 'height': h}
+                                    item.window_state = show_state_str
+                                    item.window_type = win_type_str
+                                    item.window_tab_count = num_tabs
                                     item.source_item = source_item
                                     results.append(item)
                                 except Exception as e:
@@ -2006,6 +2012,17 @@ class Chrome(WebBrowser):
 
             except Exception as e:
                 unparsed.source(filename, f'raw command pass failed ({e})')
+
+        # Give every session row its window. Window rows already carry it in session_id;
+        # tab rows look theirs up, as the Sessions sheet does, so a JSONL reader can place
+        # a tab in its window without the session structure.
+        for item in results:
+            if 'window' in getattr(item, 'row_type', ''):
+                item.window_id = item.session_id
+            elif item.session_id is not None:
+                window_id = session_tabs.get(item.session_id, {}).get('window_id')
+                if window_id is not None:
+                    item.window_id = window_id
 
         # Build tab navigation stacks from NavigationEntry results
         # tab_nav_stacks: tab_id -> {nav_index: (url, title, timestamp)} (latest entry per index)
@@ -2033,6 +2050,7 @@ class Chrome(WebBrowser):
 
         # Store session structure for Excel output
         self.session_structure = {
+            'browser': 'Chrome',
             'windows': session_windows,
             'tabs': session_tabs,
             'tab_groups': session_tab_groups,

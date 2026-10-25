@@ -20,10 +20,11 @@
     "chrome:session:navigation": 9,
     "chrome:session_storage:entry": 265,
     "chrome:site_setting:entry": 135,
-    "chrome:sync_data:entry": 1
+    "chrome:sync_data:entry": 1,
+    "firefox:session:window": 6
   },
   "generated_by": {
-    "generated_utc": "2026-09-14T05:09:50Z",
+    "generated_utc": "2026-10-25T20:25:21Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -427,5 +428,5 @@
     }
   },
   "root": "magnet.ctf_2018",
-  "total_records": 14331
+  "total_records": 14337
 }
