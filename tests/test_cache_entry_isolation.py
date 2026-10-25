@@ -77,6 +77,10 @@ class TestIterateCacheEntries(unittest.TestCase):
         self.assertEqual(['self'], list(inspect.signature(folder._lazy_load_cache).parameters))
         self.assertEqual(['self', 'key', 'decompress', 'omit_data'],
                          list(inspect.signature(folder._yield_cache_record).parameters))
+        # get_cache calls this on the class, so it has to stay a staticmethod.
+        self.assertIsInstance(inspect.getattr_static(folder, '_decompress_cache_data'), staticmethod)
+        self.assertEqual(['data', 'content_encoding'],
+                         list(inspect.signature(folder._decompress_cache_data).parameters))
 
 
 class TestGetCacheIsolatesEntries(unittest.TestCase):
