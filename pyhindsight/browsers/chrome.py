@@ -2058,14 +2058,6 @@ class Chrome(WebBrowser):
 
         ss_ldb_records = None
 
-        # The bundled ccl_chromium_sessionstorage overwrites its module-level `log`
-        # with None, so its own `log.warning(...)` calls (e.g. when a record fails to
-        # UTF-16-LE decode) raise AttributeError and abort the whole run instead of
-        # skipping the bad record. Hand it a real logger so it degrades gracefully.
-        if ccl_chromium_reader.ccl_chromium_sessionstorage.log is None:
-            ccl_chromium_reader.ccl_chromium_sessionstorage.log = \
-                logging.getLogger(ccl_chromium_reader.ccl_chromium_sessionstorage.__name__)
-
         try:
             ss_ldb_records = ccl_chromium_reader.ccl_chromium_sessionstorage.SessionStoreDb(pathlib.Path(ss_path))
         except Exception as e:

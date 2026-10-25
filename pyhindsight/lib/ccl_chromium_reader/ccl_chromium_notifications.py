@@ -23,6 +23,7 @@ SOFTWARE.
 import datetime
 import enum
 import io
+import logging
 import os
 import struct
 import sys
@@ -36,6 +37,8 @@ from .serialization_formats import ccl_blink_value_deserializer, ccl_v8_value_de
 __version__ = "0.3"
 __description__ = "Library for reading Chrome/Chromium notifications (Platform Notifications)"
 __contact__ = "Alex Caithness"
+
+log = logging.getLogger(__name__)
 
 # See content/browser/notifications/notification_database.cc
 #   and content/browser/notifications/notification_database_data.proto
@@ -208,8 +211,8 @@ class NotificationReader:
                 data = root.only("notification_data").only("data").value
                 if data:
                     if data[0] != 0xff:
-                        print(key)
-                        print(data)
+                        log.debug("Notification key: %r", key)
+                        log.debug("Notification data: %r", data)
                         raise ValueError("Missing blink tag at the start of data")
                     blink_version, blink_version_bytes = pb._read_le_varint(io.BytesIO(data[1:]))
                     data_start = 1 + len(blink_version_bytes)
@@ -222,8 +225,7 @@ class NotificationReader:
                             deserializer = ccl_v8_value_deserializer.Deserializer(
                                 obj_raw, host_object_delegate=blink_deserializer.read)
                         except ValueError:
-                            print("Error record:")
-                            print(level_db_info, key)
+                            log.error("Error deserializing notification record: %s %r", level_db_info, key)
                             raise
                         data = deserializer.read()
 

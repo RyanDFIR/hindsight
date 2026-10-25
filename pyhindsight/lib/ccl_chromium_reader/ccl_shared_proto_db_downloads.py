@@ -26,10 +26,13 @@ __contact__ = "Alex Caithness"
 
 import datetime
 import io
+import logging
 import os
 import pathlib
 import sys
 import typing
+
+log = logging.getLogger(__name__)
 
 from .storage_formats import ccl_leveldb
 from .serialization_formats import ccl_protobuff as pb
@@ -132,7 +135,7 @@ def read_downloads(
                 try:
                     download = Download.from_pb(str(rec.origin_file), rec.seq, obj, target_path_is_utf_16=utf16_paths)
                 except ValueError as ex:
-                    print(f"Error reading a download: {ex}", file=sys.stderr)
+                    log.error("Error reading a download: %s", ex)
                     if handle_errors:
                         continue
                     else:

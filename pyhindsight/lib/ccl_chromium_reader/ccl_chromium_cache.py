@@ -24,6 +24,7 @@ SOFTWARE.
 import abc
 import dataclasses
 import io
+import logging
 import os
 import re
 import sys
@@ -41,6 +42,8 @@ __contact__ = "Alex Caithness"
 
 from .structures import ArtifactLocation
 from .profile_folder_protocols import ArtifactLocationProtocol
+
+log = logging.getLogger(__name__)
 
 _CHROME_EPOCH = datetime.datetime(1601, 1, 1)
 EIGHT_BYTE_PICKLE_ALIGNMENT = True  # switch this if you get errors about the EOF magic when doing a Simple Cache
@@ -937,15 +940,14 @@ class ChromiumBlockFileCache(ChromiumCache):
         for addr in self._index_file.index:
             while addr.is_initialized:
                 if not addr.sanity_check_for_entry():
-                    print(f"Warning: Addr skipped as it is not sane for an entry: {addr}", file=sys.stderr)
+                    log.warning("Addr skipped as it is not sane for an entry: %s", addr)
                     break
                 raw = self.get_data_for_addr(addr)
                 try:
                     es = EntryStore.from_bytes(raw)
                 except (ValueError, OverflowError):
-                    print("Warning: EntryStore could not be read and it being skipped; bad data follows, if you "
-                          "believe it to be a valid record, please contact the developer.", file=sys.stderr)
-                    print(raw, file=sys.stderr)
+                    log.warning("EntryStore could not be read and is being skipped")
+                    log.debug("Bad EntryStore data: %r", raw)
                     break
                 if es.key is not None:
                     key = es.key
@@ -1003,8 +1005,8 @@ class ChromiumBlockFileCache(ChromiumCache):
         elif addr.file_type == FileType.EXTERNAL:
             external_file_path = self._in_dir / f"f_{addr.external_file_number:06x}"
             if not external_file_path.exists():
-                print(f"Warning: External cache file {external_file_path} is referenced in the data, but "
-                      f"does not exist in the cache folder.", file=sys.stderr)
+                log.warning("External cache file %s is referenced in the data but does not exist in the cache folder",
+                            external_file_path)
                 return None
             with external_file_path.open("rb") as f:
                 return f.read()
@@ -1031,7 +1033,7 @@ class ChromiumBlockFileCache(ChromiumCache):
 
         stream_length = es.data_sizes[stream_number]
         if data is not None and len(data) < stream_length:
-            print(es, file=sys.stderr)
+            log.debug("Incomplete stream data for EntryStore: %s", es)
             raise ValueError(f"Could not get all of the data for stream {stream_number}")
         data = data[0:stream_length]
         return data

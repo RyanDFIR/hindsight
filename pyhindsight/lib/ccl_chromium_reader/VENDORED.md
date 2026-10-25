@@ -4,7 +4,7 @@ This is a copy of ccl_chromium_reader, not code written for Hindsight. Do not ed
 tools/vendor_ccl.py replaces this directory, and its --check fails on any difference.
 
 Source: https://github.com/hindsight-foundry/ccl_chromium_reader
-Commit: `ef840de30221c4d65bc96d2f4d9057e9ef2f526d`
+Commit: `4ca841662f28e2d668b65afde62a4647bbe176bb`
 Upstream: https://github.com/cclgroupltd/ccl_chromium_reader
 
 The source is Hindsight's fork. Its 'hindsight' branch is upstream plus fixes that are

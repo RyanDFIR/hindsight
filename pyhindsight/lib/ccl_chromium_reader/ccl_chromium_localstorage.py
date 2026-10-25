@@ -21,6 +21,7 @@ SOFTWARE.
 
 import io
 import bisect
+import logging
 import re
 import sys
 import pathlib
@@ -37,6 +38,8 @@ from .structures import ArtifactLocation
 __version__ = "0.6"
 __description__ = "Module for reading the Chromium leveldb localstorage format"
 __contact__ = "Alex Caithness"
+
+log = logging.getLogger(__name__)
 
 """
 See: https://source.chromium.org/chromium/chromium/src/+/main:components/services/storage/dom_storage/local_storage_impl.cc
@@ -168,8 +171,8 @@ class LocalStoreDb:
                     value = decode_string(record.value) if record.state == ccl_leveldb.KeyState.Live else None
                 except UnicodeDecodeError as e:
                     # Some sites play games to test the browser's capabilities like encoding half of a surrogate pair
-                    print(f"Error decoding record value at seq no {record.seq}; "
-                          f"{storage_key} {script_key}:  {record.value}")
+                    log.warning("Error decoding record value at seq no %s; %s %s: %r",
+                                record.seq, storage_key, script_key, record.value)
                     continue
 
                 self._records.setdefault(storage_key, {})

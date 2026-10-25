@@ -19,6 +19,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+import logging
 import sys
 import pathlib
 import typing
@@ -35,13 +36,13 @@ __version__ = "0.7"
 __description__ = "Module for reading the Chromium leveldb sessionstorage format"
 __contact__ = "Alex Caithness"
 
+log = logging.getLogger(__name__)
+
 # See: https://source.chromium.org/chromium/chromium/src/+/main:components/services/storage/dom_storage/session_storage_metadata.cc
 # et al
 
 _NAMESPACE_PREFIX = b"namespace-"
 _MAP_ID_PREFIX = b"map-"
-
-log = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -82,12 +83,12 @@ class SessionStoreDb:
                 try:
                     key = rec.user_key.decode("utf-8")
                 except UnicodeDecodeError:
-                    print(f"Invalid namespace key: {rec.user_key}")
+                    log.warning("Invalid namespace key (UnicodeDecodeError): %r", rec.user_key)
                     continue
 
                 split_key = key.split("-", 2)
                 if len(split_key) != 3:
-                    print(f"Invalid namespace key: {key}")
+                    log.warning("Invalid namespace key (unexpected format): %r", key)
                     continue
 
                 _, guid, host = split_key
@@ -105,7 +106,7 @@ class SessionStoreDb:
                     try:
                         map_id = rec.value.decode("utf-8")
                     except UnicodeDecodeError:
-                        print(f"Invalid namespace value: {key}")
+                        log.warning("Invalid namespace value (UnicodeDecodeError) for key: %r", key)
                         continue
 
                     if not map_id:
@@ -113,10 +114,8 @@ class SessionStoreDb:
 
                     #if map_id in self._map_id_to_host_guid and self._map_id_to_host_guid[map_id] != guid_host_pair:
                     if map_id in self._map_id_to_host and self._map_id_to_host[map_id] != host:
-                        print("Map ID Collision!")
-                        print(f"map_id: {map_id}")
-                        print(f"Old host: {self._map_id_to_host[map_id]}")
-                        print(f"New host: {guid_host_pair}")
+                        log.warning("Map ID collision: map_id=%r old_host=%r new_host=%r",
+                                    map_id, self._map_id_to_host[map_id], guid_host_pair)
                         raise ValueError("map_id collision")
                     else:
                         self._map_id_to_host[map_id] = host
@@ -134,7 +133,7 @@ class SessionStoreDb:
                 try:
                     key = rec.user_key.decode("utf-8")
                 except UnicodeDecodeError:
-                    print(f"Invalid map id key: {rec.user_key}")
+                    log.warning("Invalid map id key (UnicodeDecodeError): %r", rec.user_key)
                     continue
 
                 # if rec.state == ccl_leveldb.KeyState.Deleted:
@@ -142,7 +141,7 @@ class SessionStoreDb:
 
                 split_key = key.split("-", 2)
                 if len(split_key) != 3:
-                    print(f"Invalid map id key: {key}")
+                    log.warning("Invalid map id key (unexpected format): %r", key)
                     continue
 
                 _, map_id, ss_key = split_key
@@ -155,8 +154,7 @@ class SessionStoreDb:
                 try:
                     value = rec.value.decode("UTF-16-LE") if rec.state == ccl_leveldb.KeyState.Live else None
                 except UnicodeDecodeError:
-                    print(f"Error decoding value for {key}")
-                    print(f"Raw Value: {rec.value}")
+                    log.warning("Error decoding value for key %r; raw value: %r", key, rec.value)
                     continue
 
                 host = self._map_id_to_host.get(map_id)
