@@ -673,8 +673,9 @@ class TestOutputs(unittest.TestCase):
                 con.execute('SELECT etag_format, etag_modified, etag_size FROM timeline').fetchone())
             # Appended after the existing columns, so their positions are unchanged.
             columns = [row[1] for row in con.execute('PRAGMA table_info(timeline)')]
+            # (The tab and window columns were appended after them in turn.)
             self.assertEqual(['body_sha256', 'etag_format', 'etag_modified', 'etag_size',
-                              'etag_notes'], columns[-5:])
+                              'etag_notes', 'tab_id', 'window_id', 'session_id'], columns[-8:])
         finally:
             con.close()
 

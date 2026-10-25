@@ -1271,6 +1271,7 @@ class Firefox(WebBrowser):
                 item.value = ''
                 item.source_item = source_item
                 item.transition_type = 'selected'
+                item.window_id = window_id
                 results.append(item)
 
             if nav_stack and not skip_structure:
@@ -1302,6 +1303,8 @@ class Firefox(WebBrowser):
                     'show_state': self.SESSIONSTORE_SIZEMODES.get(
                         window.get('sizemode'), window.get('sizemode') or '?'),
                     'bounds': bounds,
+                    'rect': ({'x': window.get('screenX', 0), 'y': window.get('screenY', 0),
+                              'width': width, 'height': height} if width and height else None),
                     'selected_tab_index': (window.get('selected') or 0) - 1,
                     'sources': [source_label],
                 }
@@ -1349,6 +1352,7 @@ class Firefox(WebBrowser):
                     item.value = ''
                     item.source_item = source_item
                     item.transition_type = 'closed'
+                    item.window_id = window_id
                     results.append(item)
 
         for cw_idx, cwin in enumerate(doc.get('_closedWindows', []) or []):
@@ -1378,6 +1382,7 @@ class Firefox(WebBrowser):
                     item.value = ''
                     item.source_item = source_item
                     item.transition_type = 'closed'
+                    item.window_id = f'closedwin{cw_idx}'
                     results.append(item)
 
     def get_sessionstore(self, path):
@@ -1411,6 +1416,7 @@ class Firefox(WebBrowser):
         # Snapshots overlap heavily, so every window is merged into one structure keyed
         # by content; seen_windows maps a layout signature to the window that owns it.
         structure = {
+            'browser': 'Firefox',
             'windows': {}, 'tabs': {}, 'tab_groups': {},
             'active_window': None, 'tab_current_urls': {}, 'tab_nav_stacks': {},
             'entries_seen': 0,
