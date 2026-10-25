@@ -61,7 +61,7 @@ class TestSiteCharacteristicsDatabaseMetadata(unittest.TestCase):
             }
             with mock.patch('pyhindsight.utils.get_ldb_records', return_value=[record]):
                 with _LogCapture() as captured:
-                    count = browser.get_site_characteristics(tmp, 'Site Characteristics Database')
+                    count = browser.get_site_characteristics(tmp, 'Site Characteristics Database').count
             return count, captured, browser.parsed_artifacts
 
     def test_the_expected_version_is_skipped_and_reported(self):

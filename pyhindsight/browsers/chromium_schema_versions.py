@@ -7,7 +7,7 @@ chrome_versions_for_schema in chrome.py maps a database's meta.version back to
 the Chrome versions listed here.
 """
 
-GENERATED = '2026-09-19'
+GENERATED = '2026-10-14'
 
 # {Chrome version: the tag its schema versions were read from}
 RELEASE_TAGS = {
@@ -152,19 +152,21 @@ RELEASE_TAGS = {
     141: '141.0.7390.135',
     142: '142.0.7444.273',
     143: '143.0.7499.205',
-    144: '144.0.7559.263',
+    144: '144.0.7559.264',
     145: '145.0.7632.218',
     146: '146.0.7680.252',
     147: '147.0.7727.149',
     148: '148.0.7778.288',
     149: '149.0.7827.238',
-    150: '150.0.7871.255',
+    150: '150.0.7871.256',
     151: '151.0.7922.226',
-    152: '152.0.7977.137',
-    153: '153.0.8010.55',
-    154: '154.0.8037.52',
-    155: '155.0.8059.8',
-    156: '156.0.8066.3',
+    152: '152.0.7977.168',
+    153: '153.0.8010.57',
+    154: '154.0.8037.154',
+    155: '155.0.8059.83',
+    156: '156.0.8078.40',
+    157: '157.0.8084.6',
+    158: '158.0.8104.1',
 }
 
 # {Chrome version: {database: schema version}}. A database is absent from Chrome
@@ -323,34 +325,36 @@ SCHEMA_VERSIONS = {
     153: {'History': 70, 'Web Data': 153, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
     154: {'History': 70, 'Web Data': 154, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
     155: {'History': 70, 'Web Data': 156, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
-    156: {'History': 70, 'Web Data': 157, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
+    156: {'History': 70, 'Web Data': 158, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
+    157: {'History': 70, 'Web Data': 159, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
+    158: {'History': 70, 'Web Data': 160, 'Cookies': 24, 'Login Data': 43, 'DIPS': 11},
 }
 
 # {database: {source path: (oldest, newest Chrome version its constant was read from)}}
 SOURCE_PATHS = {
     'History': {
         'chrome/browser/history/history_database.cc': (3, 41),
-        'components/history/core/browser/history_database.cc': (42, 156),
+        'components/history/core/browser/history_database.cc': (42, 158),
     },
     'Web Data': {
         'chrome/browser/webdata/web_database.cc': (3, 27),
         'components/webdata/common/web_database.cc': (28, 127),
-        'components/webdata/common/web_database.h': (128, 156),
+        'components/webdata/common/web_database.h': (128, 158),
     },
     'Cookies': {
         'chrome/browser/net/sqlite_persistent_cookie_store.cc': (4, 27),
         'content/browser/net/sqlite_persistent_cookie_store.cc': (28, 44),
-        'net/extras/sqlite/sqlite_persistent_cookie_store.cc': (45, 156),
+        'net/extras/sqlite/sqlite_persistent_cookie_store.cc': (45, 158),
     },
     'Login Data': {
         'chrome/browser/password_manager/login_database.cc': (3, 33),
         'components/password_manager/core/browser/login_database.cc': (34, 120),
-        'components/password_manager/core/browser/password_store/login_database.cc': (121, 156),
+        'components/password_manager/core/browser/password_store/login_database.cc': (121, 158),
     },
     'DIPS': {
         'chrome/browser/dips/dips_database.cc': (108, 125),
         'chrome/browser/dips/dips_database.h': (126, 132),
         'content/browser/dips/dips_database.h': (133, 134),
-        'content/browser/btm/btm_database.h': (135, 156),
+        'content/browser/btm/btm_database.h': (135, 158),
     },
 }

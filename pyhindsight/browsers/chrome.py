@@ -14,7 +14,8 @@ import json
 import logging
 import puremagic
 import base64
-import ccl_chromium_reader
+from pyhindsight.lib import ccl_chromium_reader
+from pyhindsight.lib.ccl_vendored import CCL_CHROMIUM_READER_COMMIT
 
 from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
@@ -133,11 +134,9 @@ class Chrome(WebBrowser):
         WebBrowser.__init__(
             self, profile_path, browser_name=browser_name, cache_path=cache_path, version=version, timezone=timezone,
             no_copy=no_copy, temp_dir=temp_dir, artifact_filter=artifact_filter)
-        self.profile_path = profile_path
         # Honor a variant passed by the caller (e.g. "Edge", "Brave", "Vivaldi");
         # all Chromium variants currently share this parser and differ only in variant.
         self.browser_name = browser_name or "Chrome"
-        self.cache_path = cache_path
         self.timezone = timezone
         self.installed_extensions = {}
         # Per-extension records keyed by ext_id, merged from the on-disk Extensions/
@@ -529,7 +528,7 @@ class Chrome(WebBrowser):
                             visits.id as visit_id
                         FROM urls, visits WHERE urls.id = visits.url'''}
 
-        source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'History items') as cursor:
             if cursor is None:
                 return None
@@ -609,7 +608,7 @@ class Chrome(WebBrowser):
                         FROM playback LEFT JOIN playbackSession 
                             ON playback.last_updated_time_s = playbackSession.last_updated_time_s'''}
 
-        source_item = os.path.relpath(os.path.join(path, history_file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'Media History items') as cursor:
             if cursor is None:
                 return None
@@ -740,7 +739,7 @@ class Chrome(WebBrowser):
                         downloads.state, downloads.full_path, downloads.start_time
                     FROM downloads'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'Download items') as cursor:
             if cursor is None:
@@ -840,7 +839,7 @@ class Chrome(WebBrowser):
         ldb_path = os.path.join(path, dir_name)
         log.info('Downloads (shared_proto_db):')
         log.info(f' - Reading from {ldb_path}')
-        source_item = os.path.relpath(ldb_path, self.profile_path)
+        source_item = utils.relpath(ldb_path, self.profile_path)
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
@@ -867,7 +866,7 @@ class Chrome(WebBrowser):
         # rewrites a download's entry as it progresses, so earlier records are partial
         # snapshots (empty target path, no end time, etc.).
         latest_by_guid = {}
-        for record in ldb_records.iterate_records_raw():
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             if record.state.name != 'Live':
                 continue
             if not record.user_key.startswith(b'21_'):
@@ -1052,7 +1051,7 @@ class Chrome(WebBrowser):
                             cookies.last_access_utc, cookies.expires_utc, cookies.secure, cookies.httponly
                         FROM cookies'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Cookie items') as cursor:
             if cursor is None:
                 return None
@@ -1126,7 +1125,7 @@ class Chrome(WebBrowser):
                  6:  '''SELECT origin_url, action_url, username_element, username_value, password_element,
                             password_value, date_created, blacklisted_by_user FROM logins'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(path, database, query, version, 'Login items') as cursor:
             if cursor is None:
                 return None
@@ -1230,7 +1229,7 @@ class Chrome(WebBrowser):
                  2: '''SELECT autofill_dates.date_created, autofill.name, autofill.value, autofill.count
                         FROM autofill, autofill_dates WHERE autofill.pair_id = autofill_dates.pair_id'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'Autofill items') as cursor:
             if cursor is None:
@@ -1289,7 +1288,7 @@ class Chrome(WebBrowser):
                    'last_user_interaction_time', 'first_web_authn_assertion_time',
                    'last_web_authn_assertion_time']
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
         with self._execute_compatible_query(
                 path, database, query, version, 'DIPS items') as cursor:
             if cursor is None:
@@ -1320,7 +1319,7 @@ class Chrome(WebBrowser):
         query = {117: '''SELECT opener_site, popup_site, last_popup_time FROM popups''',
                  133: '''SELECT opener_site, popup_site, last_popup_time, is_authentication_interaction FROM popups'''}
 
-        source_item = os.path.relpath(os.path.join(path, database), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, database), self.profile_path)
 
         with self._execute_compatible_query(
                 path, database, query, version, 'DIPS Popup items') as cursor:
@@ -1347,7 +1346,7 @@ class Chrome(WebBrowser):
     def get_bookmarks(self, path, file, version):
         # Set up empty return array
         results = []
-        source_item = os.path.relpath(os.path.join(path, file), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, file), self.profile_path)
 
         log.info(f'Bookmark items from {file}:')
 
@@ -1421,7 +1420,7 @@ class Chrome(WebBrowser):
         if 'leveldb' in local_storage_listing:
             log.debug(' - Found "leveldb" directory; reading Local Storage LevelDB records')
             ls_ldb_path = os.path.join(ls_path, 'leveldb')
-            ls_ldb_records = utils.get_ldb_records(ls_ldb_path)
+            ls_ldb_records = utils.get_ldb_records(ls_ldb_path, unparsed)
             log.debug(f' - Reading {len(ls_ldb_records)} Local Storage raw LevelDB records; beginning parsing')
             for record in ls_ldb_records:
                 ls_item = self.parse_ls_ldb_record(record)
@@ -1527,8 +1526,8 @@ class Chrome(WebBrowser):
         results = []
         unparsed = ParseFailures('Sessions')
 
-        from ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
-        from ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
+        from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
+        from pyhindsight.lib.ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
         from pyhindsight.lib.page_state import parse_page_state
 
         sessions_path = os.path.join(path, dir_name)
@@ -1722,7 +1721,7 @@ class Chrome(WebBrowser):
                 continue
 
             file_path = os.path.join(sessions_path, filename)
-            source_item = os.path.relpath(file_path, self.profile_path)
+            source_item = utils.relpath(file_path, self.profile_path)
 
             # Pass 1: Use CCL to parse NavigationEntry commands
             try:
@@ -2038,7 +2037,7 @@ class Chrome(WebBrowser):
         ss_path = os.path.join(path, dir_name)
         log.info('Session Storage:')
         log.info(f' - Reading from {ss_path}')
-        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__}')
+        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ss_path):
             log.error(f' - {ss_path} is not a directory')
@@ -2048,14 +2047,6 @@ class Chrome(WebBrowser):
         log.debug(f' - {len(session_storage_listing)} files in Session Storage directory')
 
         ss_ldb_records = None
-
-        # The bundled ccl_chromium_sessionstorage overwrites its module-level `log`
-        # with None, so its own `log.warning(...)` calls (e.g. when a record fails to
-        # UTF-16-LE decode) raise AttributeError and abort the whole run instead of
-        # skipping the bad record. Hand it a real logger so it degrades gracefully.
-        if ccl_chromium_reader.ccl_chromium_sessionstorage.log is None:
-            ccl_chromium_reader.ccl_chromium_sessionstorage.log = \
-                logging.getLogger('ccl_chromium_reader.ccl_chromium_sessionstorage')
 
         try:
             ss_ldb_records = ccl_chromium_reader.ccl_chromium_sessionstorage.SessionStoreDb(pathlib.Path(ss_path))
@@ -2135,7 +2126,7 @@ class Chrome(WebBrowser):
         idb_path = os.path.join(path, dir_name)
         log.info('IndexedDB:')
         log.info(f' - Reading from {idb_path}')
-        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__}')
+        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(idb_path):
             log.error(f' - {idb_path} is not a directory')
@@ -2442,7 +2433,7 @@ class Chrome(WebBrowser):
 
         log.info('Extension Settings (Secure Preferences):')
         pref_path = os.path.join(path, preferences_file)
-        source_item = os.path.relpath(pref_path, self.profile_path)
+        source_item = utils.relpath(pref_path, self.profile_path)
         try:
             log.info(f' - Reading from {pref_path}')
             with open(pref_path, encoding='utf-8', errors='replace') as f:
@@ -2778,7 +2769,7 @@ class Chrome(WebBrowser):
 
         # Open 'Preferences' file
         pref_path = os.path.join(path, preferences_file)
-        source_item = os.path.relpath(pref_path, self.profile_path)
+        source_item = utils.relpath(pref_path, self.profile_path)
         try:
             log.info(f' - Reading from {pref_path}')
             with open(pref_path, encoding='utf-8', errors='replace') as f:
@@ -3226,7 +3217,7 @@ class Chrome(WebBrowser):
 
     def get_platform_notifications(self, path, dir_name):
         try:
-            from ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
+            from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
         except ImportError as e:
             log.exception(f' - Exception importing ccl_chromium_notifications: {e}')
             return None
@@ -3236,7 +3227,7 @@ class Chrome(WebBrowser):
         log.info('Platform Notifications:')
         pn_root_path = os.path.join(path, dir_name)
         log.info(f' - Reading from {pn_root_path}')
-        source_item = os.path.relpath(pn_root_path, self.profile_path)
+        source_item = utils.relpath(pn_root_path, self.profile_path)
 
         try:
             with NotificationReader(pathlib.Path(pn_root_path)) as reader:
@@ -3334,7 +3325,7 @@ class Chrome(WebBrowser):
             log.error(f' - {ldb_path} is not a directory')
             return None
 
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         ldb_records = None
         try:
@@ -3370,7 +3361,7 @@ class Chrome(WebBrowser):
         # fetched from and to verify on-disk bytes against the LDB-recorded hash.
         resource_to_record = {}
 
-        for record in ldb_records.iterate_records_raw():
+        for record in utils.iterate_leveldb_records(ldb_records, unparsed):
             key = record.user_key
             if key.startswith(b'REG:'):
                 nul_pos = key.rfind(b'\x00')
@@ -3427,7 +3418,7 @@ class Chrome(WebBrowser):
         user_data_count = 0
 
         try:
-            for record in ldb_records.iterate_records_raw():
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 key = record.user_key
 
                 if key.startswith(b'REG:'):
@@ -3877,7 +3868,7 @@ class Chrome(WebBrowser):
                                 # decompresses; all hold readable content.
                                 tl_item.body_sha256 = body_sha
                                 tl_item.last_modified = last_mod_val
-                                tl_item.source_item = os.path.relpath(
+                                tl_item.source_item = utils.relpath(
                                     scf_path, self.profile_path)
                                 self.parsed_artifacts.append(tl_item)
                     finally:
@@ -3899,7 +3890,7 @@ class Chrome(WebBrowser):
         log.info(f'Cache items from {cache_path_to_parse}:')
         profile = ccl_chromium_reader.ChromiumProfileFolder(
             path=pathlib.Path(path), cache_folder=cache_path_to_parse, missing_data_ok=True)
-        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__}')
+        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         cache_display_name = dir_name
         if dir_name == 'Cache_Data':
@@ -3911,7 +3902,7 @@ class Chrome(WebBrowser):
             return 0
 
         cache_items = profile.iterate_cache(url=None, omit_cached_data=False)
-        source_item = os.path.relpath(os.path.join(path, dir_name), self.profile_path)
+        source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
         phantom_locations = 0
@@ -4018,12 +4009,13 @@ class Chrome(WebBrowser):
 
     def get_unified_extension_data(self, path, dir_name):
         results = []
+        unparsed = ParseFailures(dir_name)
 
         # Grab file list of input directory
         ldb_path = os.path.join(path, dir_name)
         log.info(f'{dir_name}:')
         log.info(f' - Reading from {ldb_path}')
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
@@ -4050,7 +4042,7 @@ class Chrome(WebBrowser):
         dynamic_scripts_all = []    # [(ext_id, seq, state, value)] -- every recoverable record
 
         if ldb_records:
-            for record in ldb_records.iterate_records_raw():
+            for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                 user_key = record.user_key.decode()
                 ext_id = None
                 ext_name = ""
@@ -4085,7 +4077,7 @@ class Chrome(WebBrowser):
             self._carve_dynamic_scripts(dynamic_scripts_all)
 
         self.parsed_extension_data.extend(results)
-        return len(results)
+        return unparsed.result(len(results))
 
     def get_dnr_extension_rules(self, path, dir_name):
         """Parse declarativeNetRequest DYNAMIC rules from
@@ -4341,7 +4333,7 @@ class Chrome(WebBrowser):
             ldb_path = os.path.join(path, dir_name, ext_id)
             log.info(f'{dir_name}:')
             log.info(f' - Reading from {ldb_path}')
-            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
             if not os.path.isdir(ldb_path):
                 unparsed.source(ldb_path, 'not a directory')
@@ -4358,7 +4350,7 @@ class Chrome(WebBrowser):
                 unparsed.source(ldb_path, f'possible LevelDB corruption ({e})')
 
             if ldb_records:
-                for record in ldb_records.iterate_records_raw():
+                for record in utils.iterate_leveldb_records(ldb_records, unparsed):
                     user_key = record.user_key.decode()
                     parsed = Chrome.ExtensionStorageItem(
                         profile=self.profile_path, extension_id=ext_id, extension_name=self.get_extension_name_from_id(ext_id), key=user_key, value=record.value.decode(),
@@ -4539,7 +4531,7 @@ class Chrome(WebBrowser):
         # web origin (https_www.google.com_0)
         if 'Origins' in fs_root_listing:
             ldb_path = os.path.join(fs_root_path, 'Origins')
-            origins = utils.get_ldb_records(ldb_path, 'ORIGIN:')
+            origins = utils.get_ldb_records(ldb_path, unparsed, 'ORIGIN:')
             for origin in origins:
                 origin_domain = origin['key'].decode()
                 origin_id = origin['value'].decode()
@@ -4580,7 +4572,7 @@ class Chrome(WebBrowser):
                     # // where FileInfo has |parent_id|, |data_path|, |name| and |modification_time|
                     # from cs.chromium.org/chromium/src/storage/browser/file_system/sandbox_directory_database.cc
 
-                    path_items = utils.get_ldb_records(fs_paths_path)
+                    path_items = utils.get_ldb_records(fs_paths_path, unparsed)
 
                     # Loop over records looking for "file_id" records to build backing_files dict. We skip
                     # deleted records here, as deleted "file_id" records aren't useful. We'll loop over this
@@ -4722,6 +4714,7 @@ class Chrome(WebBrowser):
 
     def get_site_characteristics(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Site Characteristics')
 
         self.build_md5_hash_list_of_origins()
 
@@ -4737,9 +4730,9 @@ class Chrome(WebBrowser):
         sc_root_listing = os.listdir(sc_root_path)
         log.debug(f' - {len(sc_root_listing)} files in Site Characteristics directory: {str(sc_root_listing)}')
 
-        source_item = os.path.relpath(sc_root_path, self.profile_path)
+        source_item = utils.relpath(sc_root_path, self.profile_path)
 
-        items = utils.get_ldb_records(sc_root_path)
+        items = utils.get_ldb_records(sc_root_path, unparsed)
         for item in items:
             try:
                 from pyhindsight.lib.proto.components.performance_manager.persistence.site_data.site_data_pb2 import SiteDataProto
@@ -4795,10 +4788,11 @@ class Chrome(WebBrowser):
                 log.exception(f' - Exception parsing SiteDataProto ({item}): {e}')
 
         self.parsed_artifacts.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def get_sync_data(self, path, dir_name):
         result_list = []
+        unparsed = ParseFailures('Sync Data')
 
         log.info('Sync Data:')
         sync_data_root_path = os.path.join(path, dir_name)
@@ -4817,7 +4811,7 @@ class Chrome(WebBrowser):
 
         log.info(f' - Reading from {sync_data_root_path}')
 
-        items = utils.get_ldb_records(sync_data_root_path)
+        items = utils.get_ldb_records(sync_data_root_path, unparsed)
 
         from pyhindsight.lib.proto.components.sync.protocol.device_info_specifics_pb2 import DeviceInfoSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.session_specifics_pb2 import SessionSpecifics
@@ -4939,7 +4933,7 @@ class Chrome(WebBrowser):
             result_list.append(sync_record)
 
         self.parsed_sync_data.extend(result_list)
-        return len(result_list)
+        return unparsed.result(len(result_list))
 
     def build_hsts_domain_hashes(self):
         domains = self.get_clean_hostnames()
@@ -4991,7 +4985,7 @@ class Chrome(WebBrowser):
         #    trivially reveal a user's browsing history to an attacker reading the
         #    serialized state on disk.
 
-        source_item = os.path.relpath(ts_file_path, self.profile_path)
+        source_item = utils.relpath(ts_file_path, self.profile_path)
 
         with open(ts_file_path, encoding='utf-8', errors='replace') as f:
             ts_json = json.loads(f.read())

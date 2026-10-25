@@ -1,15 +1,10 @@
 recursive-include pyhindsight/plugins *.py
-recursive-include pyhindsight/lib *.py LICENSE
+recursive-include pyhindsight/lib *.py LICENSE VENDORED.md
 recursive-include pyhindsight/static *
 recursive-exclude pyhindsight/static/web_modules *
 recursive-include pyhindsight/templates *.tpl
 include hindsight.py
 include hindsight_gui.py
-
-# The only place ccl_chromium_reader is pinned. PyPI rejects direct-URL
-# dependencies so it cannot go in pyproject.toml, which leaves this file as the
-# sole pointer for anyone installing from the sdist.
-include requirements.txt
 
 # The suite is run from a git checkout, not from an installed sdist. Shipping
 # tests/*.py without tests/fixtures/ gave sdist users a suite that could not
