@@ -47,7 +47,7 @@ class _ObjStore:
         self.count = count
         self.iterated = 0
 
-    def iterate_records(self):
+    def iterate_records(self, bad_deserializer_data_handler=None):
         for seq in range(self.count):
             self.iterated += 1
             yield _Record(seq)

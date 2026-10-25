@@ -2142,10 +2142,11 @@ class Chrome(WebBrowser):
             leveldb_dirs_read += 1
 
             origin = storage_directory.split('.indexeddb')[0]
-            blob_directory = None
-            blob_path = os.path.join(idb_path, f'{origin}.indexeddb.blob')
-            if os.path.exists(blob_path):
-                blob_directory = blob_path
+            # Passed even when the directory is absent. With no blob dir ccl raises
+            # "Can't resolve blob if blob dir is not set" from outside its per-record
+            # handler, which ends the object store; with one, a record whose blob is
+            # not on disk is a FileNotFoundError the handler below can skip.
+            blob_directory = os.path.join(idb_path, f'{origin}.indexeddb.blob')
 
             # Budget for this store directory, not for the run: one huge store must not
             # eat the allowance of the ones after it.
@@ -2167,8 +2168,33 @@ class Chrome(WebBrowser):
                         # A record is counted once it is dealt with, so one whose own
                         # handling raises is not counted as read before the failure.
                         obj_store_records = 0
+                        store_label = f'{database}.{obj_store_name}'
+                        skipped_records = []
+
+                        def skip_unreadable_record(key, _raw, store_label=store_label,
+                                                   skipped_records=skipped_records):
+                            # ccl calls this instead of raising for a record it cannot
+                            # read (a missing blob file, a value with no Blink tag, a
+                            # value the deserializer rejects) and then moves on to the
+                            # next record. Without it the first such record ends the
+                            # object store's generator and every later record is lost.
+                            error = sys.exc_info()[1]
+                            reason = _describe_exception(error) if error else 'Blink type tag not present'
+                            raw_key = getattr(key, 'raw_key', b'')
+                            skipped_records.append(key)
+                            # The record's position in the store keeps the name unique.
+                            # A store can hold many versions of one key, and ParseFailures
+                            # counts a repeated name once: 106 lost versions of one key
+                            # would otherwise be reported as a single unparsed record.
+                            position = obj_store_records + len(skipped_records)
+                            unparsed.record(
+                                f'{store_label} key {raw_key.hex() if isinstance(raw_key, bytes) else raw_key} '
+                                f'(record {position} in the store)',
+                                f'record could not be read ({reason})')
+
                         try:
-                            for record in obj_store.iterate_records():
+                            for record in obj_store.iterate_records(
+                                    bad_deserializer_data_handler=skip_unreadable_record):
                                 # Past the cap a record is counted, not kept. Reading on to
                                 # the end of the store is what lets the report say exactly
                                 # how many were left out.
