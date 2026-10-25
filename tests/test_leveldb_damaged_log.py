@@ -3,7 +3,7 @@ import struct
 import tempfile
 import unittest
 
-import ccl_chromium_reader.storage_formats.ccl_leveldb as ccl_leveldb
+from pyhindsight.lib.ccl_chromium_reader.storage_formats import ccl_leveldb
 
 from pyhindsight.browsers.chrome import Chrome, iterate_leveldb_records
 from pyhindsight.browsers.webbrowser import ParseFailures, ParseResult

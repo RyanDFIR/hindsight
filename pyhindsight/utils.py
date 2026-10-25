@@ -455,7 +455,7 @@ def get_ldb_records(ldb_path, prefix=''):
     filtered by a prefix string. Key and value are kept as byte strings."""
 
     try:
-        from ccl_chromium_reader.storage_formats import ccl_leveldb
+        from pyhindsight.lib.ccl_chromium_reader.storage_formats import ccl_leveldb
     except ImportError:
         log.warning(f' - Failed to import ccl_leveldb; unable to process {ldb_path}')
         return []

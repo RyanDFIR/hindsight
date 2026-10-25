@@ -14,7 +14,8 @@ import json
 import logging
 import puremagic
 import base64
-import ccl_chromium_reader
+from pyhindsight.lib import ccl_chromium_reader
+from pyhindsight.lib.ccl_vendored import CCL_CHROMIUM_READER_COMMIT
 
 from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
@@ -1536,8 +1537,8 @@ class Chrome(WebBrowser):
         results = []
         unparsed = ParseFailures('Sessions')
 
-        from ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
-        from ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
+        from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
+        from pyhindsight.lib.ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
         from pyhindsight.lib.page_state import parse_page_state
 
         sessions_path = os.path.join(path, dir_name)
@@ -2047,7 +2048,7 @@ class Chrome(WebBrowser):
         ss_path = os.path.join(path, dir_name)
         log.info('Session Storage:')
         log.info(f' - Reading from {ss_path}')
-        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__}')
+        log.info(f' - Using ccl_chromium_sessionstorage v{ccl_chromium_reader.ccl_chromium_sessionstorage.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ss_path):
             log.error(f' - {ss_path} is not a directory')
@@ -2057,14 +2058,6 @@ class Chrome(WebBrowser):
         log.debug(f' - {len(session_storage_listing)} files in Session Storage directory')
 
         ss_ldb_records = None
-
-        # The bundled ccl_chromium_sessionstorage overwrites its module-level `log`
-        # with None, so its own `log.warning(...)` calls (e.g. when a record fails to
-        # UTF-16-LE decode) raise AttributeError and abort the whole run instead of
-        # skipping the bad record. Hand it a real logger so it degrades gracefully.
-        if ccl_chromium_reader.ccl_chromium_sessionstorage.log is None:
-            ccl_chromium_reader.ccl_chromium_sessionstorage.log = \
-                logging.getLogger('ccl_chromium_reader.ccl_chromium_sessionstorage')
 
         try:
             ss_ldb_records = ccl_chromium_reader.ccl_chromium_sessionstorage.SessionStoreDb(pathlib.Path(ss_path))
@@ -2144,7 +2137,7 @@ class Chrome(WebBrowser):
         idb_path = os.path.join(path, dir_name)
         log.info('IndexedDB:')
         log.info(f' - Reading from {idb_path}')
-        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__}')
+        log.info(f' - Using ccl_chromium_indexeddb v{ccl_chromium_reader.ccl_chromium_indexeddb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(idb_path):
             log.error(f' - {idb_path} is not a directory')
@@ -3230,7 +3223,7 @@ class Chrome(WebBrowser):
 
     def get_platform_notifications(self, path, dir_name):
         try:
-            from ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
+            from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
         except ImportError as e:
             log.exception(f' - Exception importing ccl_chromium_notifications: {e}')
             return None
@@ -3338,7 +3331,7 @@ class Chrome(WebBrowser):
             log.error(f' - {ldb_path} is not a directory')
             return None
 
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         ldb_records = None
         try:
@@ -3903,7 +3896,7 @@ class Chrome(WebBrowser):
         log.info(f'Cache items from {cache_path_to_parse}:')
         profile = ccl_chromium_reader.ChromiumProfileFolder(
             path=pathlib.Path(path), cache_folder=cache_path_to_parse, missing_data_ok=True)
-        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__}')
+        log.info(f' - Using ccl_chromium_cache v{ccl_chromium_reader.ccl_chromium_cache.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         cache_display_name = dir_name
         if dir_name == 'Cache_Data':
@@ -4028,7 +4021,7 @@ class Chrome(WebBrowser):
         ldb_path = os.path.join(path, dir_name)
         log.info(f'{dir_name}:')
         log.info(f' - Reading from {ldb_path}')
-        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+        log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
         if not os.path.isdir(ldb_path):
             log.error(f' - {ldb_path} is not a directory')
@@ -4346,7 +4339,7 @@ class Chrome(WebBrowser):
             ldb_path = os.path.join(path, dir_name, ext_id)
             log.info(f'{dir_name}:')
             log.info(f' - Reading from {ldb_path}')
-            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__}')
+            log.info(f' - Using ccl_leveldb v{ccl_chromium_reader.storage_formats.ccl_leveldb.__version__} (ccl_chromium_reader {CCL_CHROMIUM_READER_COMMIT[:12]})')
 
             if not os.path.isdir(ldb_path):
                 unparsed.source(ldb_path, 'not a directory')
