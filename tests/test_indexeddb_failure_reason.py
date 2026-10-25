@@ -149,12 +149,14 @@ class _MissingBlobStore:
     Without a handler it raises, which ends the generator.
     """
 
-    def __init__(self, plan):
+    def __init__(self, plan, same_key=False):
         self.plan = plan
+        self.same_key = same_key
 
     def iterate_records(self, bad_deserializer_data_handler=None):
         for seq, outcome in enumerate(self.plan):
-            key = mock.Mock(raw_key=bytes([seq]))
+            # A store keeps earlier versions of a key, so one key can come back many times.
+            key = mock.Mock(raw_key=b'core' if self.same_key else bytes([seq]))
             if outcome == 'ok':
                 yield _Record(seq)
             elif outcome == 'missing blob':
@@ -173,7 +175,7 @@ class _MissingBlobStore:
 class TestIndexedDBUnreadableRecords(unittest.TestCase):
     """One record ccl cannot read costs that record, not the rest of its store (#357)."""
 
-    def _run(self, plan):
+    def _run(self, plan, same_key=False):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, 'IndexedDB', 'https_example.com_0.indexeddb.leveldb'))
             browser = Chrome.__new__(Chrome)
@@ -181,7 +183,8 @@ class TestIndexedDBUnreadableRecords(unittest.TestCase):
             browser.parsed_storage = []
             browser.indexeddb_max_records_per_store = None
             browser.resolve_indexeddb_blob_refs = lambda record, origin: record.value
-            wrapped = mock.Mock(return_value=_WrappedIndexDB(_Database({'store': _MissingBlobStore(plan)})))
+            store = _MissingBlobStore(plan, same_key)
+            wrapped = mock.Mock(return_value=_WrappedIndexDB(_Database({'store': store})))
             with mock.patch('pyhindsight.lib.ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB', wrapped),                     mock.patch('pyhindsight.browsers.webbrowser.log') as log:
                 result = browser.get_indexeddb(tmp, 'IndexedDB')
             return result, browser.parsed_storage, wrapped, log, tmp
@@ -198,6 +201,17 @@ class TestIndexedDBUnreadableRecords(unittest.TestCase):
 
         self.assertEqual(1, len(parsed))
         self.assertEqual(3, result.unparsed_records)
+
+    def test_unreadable_versions_of_one_key_each_count(self):
+        # In the corpus, 106 versions of one key had lost their blob file, and were
+        # reported as one unparsed record because they shared a name.
+        result, parsed, _, log, _ = self._run(['missing blob', 'ok', 'missing blob', 'missing blob'], same_key=True)
+
+        self.assertEqual(1, len(parsed))
+        self.assertEqual(3, result.unparsed_records)
+        lines = [call.args[0] for call in log.debug.call_args_list]
+        self.assertTrue(any('(record 1 in the store)' in line for line in lines), lines)
+        self.assertTrue(any('(record 4 in the store)' in line for line in lines), lines)
 
     def test_the_reason_names_what_went_wrong(self):
         _, _, _, log, _ = self._run(['missing blob', 'no blink tag'])

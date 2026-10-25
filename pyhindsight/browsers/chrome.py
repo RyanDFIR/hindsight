@@ -2169,8 +2169,10 @@ class Chrome(WebBrowser):
                         # handling raises is not counted as read before the failure.
                         obj_store_records = 0
                         store_label = f'{database}.{obj_store_name}'
+                        skipped_records = []
 
-                        def skip_unreadable_record(key, _raw, store_label=store_label):
+                        def skip_unreadable_record(key, _raw, store_label=store_label,
+                                                   skipped_records=skipped_records):
                             # ccl calls this instead of raising for a record it cannot
                             # read (a missing blob file, a value with no Blink tag, a
                             # value the deserializer rejects) and then moves on to the
@@ -2179,8 +2181,15 @@ class Chrome(WebBrowser):
                             error = sys.exc_info()[1]
                             reason = _describe_exception(error) if error else 'Blink type tag not present'
                             raw_key = getattr(key, 'raw_key', b'')
+                            skipped_records.append(key)
+                            # The record's position in the store keeps the name unique.
+                            # A store can hold many versions of one key, and ParseFailures
+                            # counts a repeated name once: 106 lost versions of one key
+                            # would otherwise be reported as a single unparsed record.
+                            position = obj_store_records + len(skipped_records)
                             unparsed.record(
-                                f'{store_label} key {raw_key.hex() if isinstance(raw_key, bytes) else raw_key}',
+                                f'{store_label} key {raw_key.hex() if isinstance(raw_key, bytes) else raw_key} '
+                                f'(record {position} in the store)',
                                 f'record could not be read ({reason})')
 
                         try:

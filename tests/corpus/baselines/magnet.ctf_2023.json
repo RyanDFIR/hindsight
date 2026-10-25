@@ -27,7 +27,7 @@
     "chrome:sync_data:entry": 1732
   },
   "generated_by": {
-    "generated_utc": "2026-09-14T07:02:31Z",
+    "generated_utc": "2026-10-25T17:45:19Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -114,7 +114,7 @@
         "IndexedDB": {
           "count": 4963,
           "status": "partial",
-          "unparsed_records": 3,
+          "unparsed_records": 6,
           "unparsed_sources": 0
         },
         "Local Extension Settings": {
