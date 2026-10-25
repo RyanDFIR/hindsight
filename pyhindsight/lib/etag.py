@@ -22,14 +22,19 @@ big it was:
                                                       downloads are served from here
     Amazon S3, Swift    "<md5>" / "<md5>-<parts>"     MD5 of the object; an S3 multipart
                                                       upload's is not an MD5 of the file
+    Akamai NetStorage   "<md5>:<seconds>[.<fraction>]"
+                                                      MD5 of the object; suffix undocumented
+    althttpd (SQLite)   "m<mtime>s<size>"             hex; mtime in seconds
+    Werkzeug (Flask)    "<mtime>-<size>[-<adler32>]"  decimal; mtime in seconds
+    Qiniu Kodo          "<qetag>"                     SHA-1 of the content
 
 What a decoded value says is still only what the server claimed. It is worth most
 where it agrees with something recorded independently, so every decode is checked
 against the Last-Modified header and the byte count the browser stored for the same
 response, and the notes say which checks passed. A decode that every available check
 contradicts is discarded rather than reported, and the formats whose shape alone does
-not identify them (ASP.NET Core, a bare Unix timestamp) are only reported when
-Last-Modified confirms them.
+not identify them (ASP.NET Core, a bare Unix timestamp) are only decoded when
+Last-Modified confirms them; without one they are shown as unconfirmed.
 
 The forensic method this supports, tying a download to a later re-acquisition of
 the same file when the original is gone, is described in
@@ -96,6 +101,7 @@ class _Context:
     timezone: datetime.tzinfo
     encoded_size: int | None = None
     content_encoding: str | None = None
+    encoded_md5: str | None = None
 
     def size_matches(self, value):
         return value is not None and value in (self.size, self.encoded_size)
@@ -109,7 +115,12 @@ class _Context:
         return f'does not match {what}'
 
     def plausible_time(self, value):
-        return value is not None and EARLIEST_PLAUSIBLE_TIME <= value <= self.latest
+        if value is None or value > self.latest:
+            return False
+        # Earlier is accepted when Last-Modified agrees (reproducible builds use 1980).
+        return value >= EARLIEST_PLAUSIBLE_TIME or (
+            value >= _UNIX_EPOCH and self.header_time is not None
+            and _same_second(value, self.header_time))
 
     def describe_time(self, value):
         return value.astimezone(self.timezone).strftime('%Y-%m-%d %H:%M:%S %Z').strip()
@@ -156,6 +167,16 @@ def _decode_azure(value, ctx):
     return [_Candidate('Azure Blob Storage', modified=modified)]
 
 
+def _decode_microsoft_distribute(value, ctx):
+    # Microsoft's download servers (Visual Studio, Windows ISOs). Not a time, and not
+    # the file's SHA-256, which is in the download URL.
+    if not re.fullmatch(r'0x[0-9A-Fa-f]{64}', value):
+        return []
+    return [_Candidate('Microsoft Distribute (0x + 256 bits)',
+                       notes=['not a time and not the file\'s SHA-256; compare the whole '
+                              'value with a later download of the same file'])]
+
+
 def _decode_s3_multipart(value, ctx):
     match = re.fullmatch(r'([0-9a-fA-F]{32})-(\d{1,5})', value)
     if not match or not 1 <= int(match.group(2)) <= 10_000:
@@ -166,11 +187,11 @@ def _decode_s3_multipart(value, ctx):
     if ctx.size and parts > 1:
         # Every part but the last is the same size, so the part size P satisfies
         # (parts - 1) * P < size <= parts * P.
-        for mib in _COMMON_PART_SIZES_MIB:
-            part_size = mib * 1024 * 1024
-            if (parts - 1) * part_size < ctx.size <= parts * part_size:
-                notes.append(f'size consistent with {mib} MiB parts')
-                break
+        fits = [mib for mib in _COMMON_PART_SIZES_MIB
+                if (parts - 1) * mib * 1024 * 1024 < ctx.size <= parts * mib * 1024 * 1024]
+        if fits:
+            listed = ', '.join(str(mib) for mib in fits[:-1]) + (' or ' if len(fits) > 1 else '')
+            notes.append(f'size consistent with {listed}{fits[-1]} MiB parts')
     return [_Candidate('Amazon S3 multipart', notes=notes)]
 
 
@@ -179,12 +200,99 @@ def _decode_md5(value, ctx):
         return []
     notes = ['usually the MD5 of the content (Amazon S3 single-part uploads, OpenStack '
              'Swift and others); compare with the MD5 of a recovered copy']
-    if ctx.body:
-        if hashlib.md5(ctx.body, usedforsecurity=False).hexdigest() == value.lower():
-            notes.append('matches the MD5 of the cached body')
-        else:
-            notes.append(ctx.body_mismatch('the MD5 of the cached body'))
+    notes += _check_md5(value, ctx)
     return [_Candidate('MD5 hash', notes=notes)]
+
+
+def _check_md5(digest, ctx):
+    if not ctx.body:
+        return []
+    if hashlib.md5(ctx.body, usedforsecurity=False).hexdigest() == digest.lower():
+        return ['matches the MD5 of the cached body']
+    if ctx.encoded_md5 == digest.lower():
+        return [f'matches the MD5 of the cached body as sent ({ctx.content_encoding}-compressed)']
+    return [ctx.body_mismatch('the MD5 of the cached body')]
+
+
+def _decode_netstorage(value, ctx):
+    """Akamai NetStorage's "<md5>:<seconds>[.<fraction>]".
+
+    The suffix is undocumented and is often minutes or days from Last-Modified, so it
+    is compared with it but not reported as the modification time.
+    """
+    match = re.fullmatch(r'([0-9a-fA-F]{32}):(\d{1,12})(?:\.\d{1,9})?', value)
+    if not match:
+        return []
+    digest, seconds = match.groups()
+    notes = ['usually the MD5 of the content; compare with the MD5 of a recovered copy']
+    notes += _check_md5(digest, ctx)
+    suffix = f'suffix {value.partition(":")[2]} is not read as the modification time'
+    suffix_time = _from_epoch(_UNIX_EPOCH, int(seconds), 1)
+    if suffix_time is not None and ctx.header_time is not None:
+        if _same_second(suffix_time, ctx.header_time):
+            suffix += '; as a Unix time it is the second of Last-Modified'
+        else:
+            direction = 'before' if suffix_time < ctx.header_time else 'after'
+            suffix += (f'; as a Unix time it is {_describe_duration(suffix_time - ctx.header_time)} '
+                       f'{direction} Last-Modified')
+    notes.append(suffix)
+    return [_Candidate('Akamai NetStorage-style', notes=notes)]
+
+
+def _decode_althttpd(value, ctx):
+    # althttpd.c: sprintf(zETag, "m%xs%x", (int)pStat->st_mtime, (int)pStat->st_size)
+    match = re.fullmatch(r'm([0-9a-f]{1,8})s([0-9a-f]{1,8})', value)
+    if not match:
+        return []
+    modified = _from_epoch(_UNIX_EPOCH, int(match.group(1), 16), 1)
+    if not ctx.plausible_time(modified):
+        return []
+    return [_Candidate('althttpd (SQLite)', modified=modified, size=int(match.group(2), 16))]
+
+
+def _decode_werkzeug(value, ctx):
+    # send_file: "<mtime>-<size>-<adler32 of the path>" in 2.x, "<mtime>-<size>" in 3.x.
+    match = re.fullmatch(r'(\d{9,10}\.\d{1,9})-(\d{1,13})(?:-(\d{1,10}))?', value)
+    if not match:
+        return []
+    modified = _from_epoch(_UNIX_EPOCH, round(float(match.group(1)) * 1_000_000), 1_000_000)
+    size = int(match.group(2))
+    if not ctx.plausible_time(modified) or size > LARGEST_PLAUSIBLE_SIZE:
+        return []
+    notes = [f'adler32 of the file\'s path on the server {match.group(3)}'] if match.group(3) else []
+    return [_Candidate('Werkzeug (Flask)', modified=modified, size=size, notes=notes)]
+
+
+_QINIU_BLOCK_SIZE = 4 * 1024 * 1024
+
+
+def _decode_qiniu(value, ctx):
+    # URL-safe base64 of 0x16 and the file's SHA-1, or for over 4 MiB, 0x96 and the
+    # SHA-1 of its 4 MiB blocks' SHA-1s.
+    if not re.fullmatch(r'[Fl][A-Za-z0-9_-]{27}', value):
+        return []
+    raw = base64.urlsafe_b64decode(value)
+    if raw[0] not in (0x16, 0x96):
+        return []
+    multi_block = raw[0] == 0x96
+    notes = ['SHA-1 of the 4 MiB blocks\' SHA-1s; the file is over 4 MiB' if multi_block
+             else 'SHA-1 of the content; the file is 4 MiB or less']
+    if ctx.size and (ctx.size > _QINIU_BLOCK_SIZE) != multi_block:
+        notes.append('the recorded size is on the other side of 4 MiB')
+    if ctx.body:
+        notes.append('matches the cached body' if raw == _qetag(ctx.body)
+                     else ctx.body_mismatch('the cached body'))
+    return [_Candidate('Qiniu Kodo', notes=notes)]
+
+
+def _qetag(body):
+    def sha1(data):
+        return hashlib.sha1(data, usedforsecurity=False).digest()
+
+    if len(body) <= _QINIU_BLOCK_SIZE:
+        return b'\x16' + sha1(body)
+    return b'\x96' + sha1(b''.join(sha1(body[i:i + _QINIU_BLOCK_SIZE])
+                                   for i in range(0, len(body), _QINIU_BLOCK_SIZE)))
 
 
 def _iis_filetimes(digits):
@@ -332,8 +440,13 @@ def _decode_unix_seconds(value, ctx):
 
 _DECODERS = (
     _decode_azure,
+    _decode_microsoft_distribute,
     _decode_s3_multipart,
     _decode_md5,
+    _decode_netstorage,
+    _decode_althttpd,
+    _decode_werkzeug,
+    _decode_qiniu,
     _decode_iis,
     _decode_tomcat,
     _decode_express_body,
@@ -345,7 +458,7 @@ _DECODERS = (
 
 def analyze(etag, last_modified=None, size=None, reference_time=None,
             reference_label='the download', size_label='total bytes', body=None, timezone=UTC,
-            content_encoding=None, encoded_size=None):
+            content_encoding=None, encoded_size=None, encoded_md5=None):
     """Identify the server format behind an ETag and decode what it carries.
 
     :param etag: The ETag header value as the browser stored it, quotes and W/ included.
@@ -364,6 +477,8 @@ def analyze(etag, last_modified=None, size=None, reference_time=None,
         ETag from the compressed one.
     :param encoded_size: The response's Content-Length before decoding, which is what
         a decoded size matches in that case.
+    :param encoded_md5: The MD5 (hex) of the body as sent, before decoding, which is
+        what an MD5 ETag matches in that case.
     :return: An ETagAnalysis, or None when there is no ETag.
     """
     if not isinstance(etag, str) or not etag.strip():
@@ -382,11 +497,14 @@ def analyze(etag, last_modified=None, size=None, reference_time=None,
         size = None
     if not content_encoding or not isinstance(encoded_size, int) or encoded_size <= 0:
         encoded_size = None
+    if not content_encoding or not isinstance(encoded_md5, str):
+        encoded_md5 = None
     ctx = _Context(
         header_time=_parse_http_date(last_modified), size=size,
         latest=(reference_time or datetime.datetime.now(UTC)) + CLOCK_SKEW_ALLOWANCE,
         body=bytes(body) if body else None, timezone=timezone or UTC,
-        encoded_size=encoded_size, content_encoding=content_encoding or None)
+        encoded_size=encoded_size, content_encoding=content_encoding or None,
+        encoded_md5=encoded_md5.lower() if encoded_md5 else None)
 
     weak_note = ['weak ETag: equivalent content, not necessarily the same bytes'] if weak else []
 
@@ -402,6 +520,14 @@ def analyze(etag, last_modified=None, size=None, reference_time=None,
             if checks and not any(checks):
                 continue  # everything that could be checked disagrees
             if candidate.needs_confirmation and not time_ok:
+                if ctx.header_time is not None:
+                    continue
+                # Nothing to check it against: show the reading, ranked below the rest.
+                candidate = _Candidate(
+                    f'{candidate.format} (unconfirmed)',
+                    notes=[f'reads as {ctx.describe_time(candidate.modified)}; not confirmed: '
+                           f'no Last-Modified to check against'])
+                scored.append((-1, candidate))
                 continue
             scored.append((checks.count(True) - checks.count(False), candidate))
 

@@ -1484,7 +1484,7 @@ class AnalysisSession(object):
             if not getattr(item, 'etag', None):
                 continue
 
-            content_encoding = encoded_size = None
+            content_encoding = encoded_size = encoded_md5 = None
             if isinstance(item, WebBrowser.DownloadItem):
                 size = item.total_bytes
                 reference_time = item.start_time
@@ -1525,6 +1525,7 @@ class AnalysisSession(object):
                         encoded_size = int((metadata.get_attribute('content-length') or [0])[0])
                     except (AttributeError, TypeError, ValueError):
                         pass
+                    encoded_md5 = getattr(item, 'encoded_md5', None)
             if not isinstance(reference_time, datetime.datetime) or reference_time.year < 1971:
                 reference_time = None
 
@@ -1533,7 +1534,8 @@ class AnalysisSession(object):
                     item.etag, last_modified=item.last_modified, size=size,
                     reference_time=reference_time, reference_label=reference_label,
                     size_label=size_label, body=body, timezone=self.timezone,
-                    content_encoding=content_encoding, encoded_size=encoded_size)
+                    content_encoding=content_encoding, encoded_size=encoded_size,
+                    encoded_md5=encoded_md5)
             except Exception as e:
                 log.warning(f'Could not analyze ETag {item.etag!r}: {e}')
                 continue

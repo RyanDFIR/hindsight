@@ -3914,7 +3914,8 @@ class Chrome(WebBrowser):
             log.info(' - Cache path is empty')
             return 0
 
-        cache_items = profile.iterate_cache(url=None, omit_cached_data=False)
+        # Decompressed below, to keep the MD5 of the body as sent for ETag checks.
+        cache_items = profile.iterate_cache(url=None, omit_cached_data=False, decompress=False)
         source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
         untimed_entries = 0
@@ -3975,13 +3976,22 @@ class Chrome(WebBrowser):
                     # is reported as absent instead of being invented or losing the URL.
                     untimed_entries += 1
 
+                data, was_decompressed, encoded_md5 = cache_item.data, False, None
+                if data is not None and metadata is not None:
+                    content_encoding = (metadata.get_attribute('content-encoding') or [''])[0]
+                    was_decompressed, data = ccl_chromium_reader.ChromiumProfileFolder._decompress_cache_data(
+                        data, content_encoding)
+                    if was_decompressed:
+                        encoded_md5 = hashlib.md5(cache_item.data, usedforsecurity=False).hexdigest()
+
                 parsed_item = WebBrowser.CacheItem(
                     profile=self.profile_path, url=cache_key.url,
                     request_time=utils.to_datetime(
                         metadata.request_time.replace(tzinfo=datetime.timezone.utc),
                         self.timezone) if metadata else None,
                     locations=describe_locations(cache_item),
-                    key=cache_key, metadata=metadata, data=cache_item.data, title=None)
+                    key=cache_key, metadata=metadata, data=data, title=None)
+                parsed_item.encoded_md5 = encoded_md5
 
                 parsed_item.row_type = row_type
                 parsed_item.data_summary = parsed_item.create_data_summary()
@@ -3990,7 +4000,7 @@ class Chrome(WebBrowser):
                 parsed_item.last_modified = (metadata.get_attribute("last-modified") or [""])[0] if metadata else ''
                 # The body is already in memory (omit_cached_data=False), so this costs
                 # no extra reads.
-                parsed_item.hash_body(cache_item.was_decompressed)
+                parsed_item.hash_body(was_decompressed)
                 if cache_item.data and parsed_item.body_sha256 is None:
                     # Body present but left unhashed because it could not be decoded. An
                     # empty hash cell otherwise reads as "no body", so count them.
