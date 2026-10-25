@@ -70,16 +70,6 @@ SITE_CHARACTERISTICS_SCHEMA_VERSION = b'1'
 INDEXEDDB_MAX_RECORDS_PER_STORE = 500_000
 
 
-def _describe_exception(e):
-    """Name an exception for a failure reason, including its type.
-
-    `str(e)` alone is blank for a bare `raise NotImplementedError()`, which turns a
-    reason into `unexpected exception ()`.
-    """
-    message = str(e)
-    return f'{type(e).__name__}: {message}' if message else type(e).__name__
-
-
 def chrome_versions_for_schema(database, schema_version, schema_versions=None):
     """The Chrome versions that leave 'database' with 'schema_version' in its meta table.
 
@@ -2179,7 +2169,7 @@ class Chrome(WebBrowser):
                             # next record. Without it the first such record ends the
                             # object store's generator and every later record is lost.
                             error = sys.exc_info()[1]
-                            reason = _describe_exception(error) if error else 'Blink type tag not present'
+                            reason = utils.describe_exception(error) if error else 'Blink type tag not present'
                             raw_key = getattr(key, 'raw_key', b'')
                             skipped_records.append(key)
                             # The record's position in the store keeps the name unique.
@@ -2246,7 +2236,7 @@ class Chrome(WebBrowser):
                             # no way to tell which data is missing from the output.
                             unparsed.source(
                                 f'{database}.{obj_store_name}',
-                                f'unexpected exception ({_describe_exception(e)}); '
+                                f'unexpected exception ({utils.describe_exception(e)}); '
                                 f'{obj_store_records} records read from this object store '
                                 f'before the failure')
             except ValueError as e:
@@ -2254,7 +2244,7 @@ class Chrome(WebBrowser):
                 continue
 
             except Exception as e:
-                unparsed.source(storage_directory, f'unexpected exception ({_describe_exception(e)})')
+                unparsed.source(storage_directory, f'unexpected exception ({utils.describe_exception(e)})')
                 continue
 
             finally:
