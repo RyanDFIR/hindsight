@@ -25,6 +25,8 @@ import struct
 import re
 import os
 import io
+import itertools
+import logging
 import pathlib
 import dataclasses
 import enum
@@ -36,6 +38,8 @@ from ... import ccl_simplesnappy
 __version__ = "0.4"
 __description__ = "A module for reading LevelDB databases"
 __contact__ = "Alex Caithness"
+
+log = logging.getLogger(__name__)
 
 
 def _read_le_varint(stream: typing.BinaryIO, *, is_google_32bit=False) -> typing.Optional[typing.Tuple[int, bytes]]:
@@ -273,6 +277,102 @@ class LogEntryType(enum.IntEnum):
     Last = 4
 
 
+@dataclasses.dataclass(frozen=True)
+class LogDamage:
+    """A stretch of a log or manifest file that could not be read and was skipped"""
+    offset: int  # file offset where the skipped data starts
+    length: int  # bytes skipped
+    reason: str
+
+
+def _record_damage(damage: typing.List[LogDamage], path: pathlib.Path, offset: int, length: int, reason: str):
+    log.warning("Damaged data at offset %d in %s (%d bytes skipped): %s", offset, path, length, reason)
+    damage.append(LogDamage(offset, length, reason))
+
+
+def _read_log_batches(raw_blocks: typing.Iterable[bytes], path: pathlib.Path,
+                      damage: typing.List[LogDamage]) -> typing.Iterable[typing.Tuple[int, bytes]]:
+    """
+    Reassemble the batches in a file in the log format (a .log file or a manifest) from its blocks,
+    yielding the file offset of each batch's data and the data.
+
+    This follows leveldb's own reader (db/log_reader.cc): when a block cannot be read, the rest of it
+    is skipped and reading resumes at the next block, so damage costs the records it touches rather
+    than the rest of the file. Each skip is logged and added to `damage`. As in leveldb, zero-filled
+    space (left when a file is preallocated, or when a crash cuts a write short) ends the block
+    quietly, and is only counted as damage when it interrupts a record or has data after it.
+    See: https://github.com/google/leveldb/blob/main/doc/log_format.md
+    """
+    def skip(offset, length, reason):
+        _record_damage(damage, path, offset, length, reason)
+
+    in_record = False
+    record_start = 0  # file offset of the header of the current record's first fragment
+    data_offset = 0  # file offset of the current record's data, as yielded
+    fragments = []
+
+    def abandon_record(end_offset, reason):
+        nonlocal in_record
+        if in_record:
+            skip(record_start, end_offset - record_start, reason)
+            in_record = False
+
+    end_of_file = 0
+    for block_offset, block in zip(itertools.count(0, LogFile.LOG_BLOCK_SIZE), raw_blocks):
+        end_of_file = block_offset + len(block)
+        at_end_of_file = len(block) < LogFile.LOG_BLOCK_SIZE
+        pos = 0
+        # Fewer than LOG_ENTRY_HEADER_SIZE bytes left in a block are padding.
+        while len(block) - pos >= LogFile.LOG_ENTRY_HEADER_SIZE:
+            header_offset = block_offset + pos
+            crc, length, block_type = struct.unpack_from("<IHB", block, pos)
+            data_start = pos + LogFile.LOG_ENTRY_HEADER_SIZE
+
+            if data_start + length > len(block):
+                # A fragment never crosses a block boundary, so the header is damaged or, at the end of
+                # the file, the write was not finished. Either way nothing more can be read from the block.
+                abandon_record(header_offset, "record interrupted by damaged data")
+                skip(header_offset, len(block) - pos,
+                     "incomplete record at the end of the file" if at_end_of_file
+                     else "record length runs past the end of its block")
+                break
+
+            if block_type == LogEntryType.Zero and length == 0:
+                abandon_record(header_offset, "record interrupted by zero-filled space")
+                # leveldb drops the rest of the block without a word. If anything but zeros
+                # follows, that is data being skipped, so say so.
+                if block[pos:].strip(b"\x00"):
+                    skip(header_offset, len(block) - pos, "data after zero-filled space")
+                break
+
+            data = block[data_start:data_start + length]
+            pos = data_start + length
+
+            if block_type == LogEntryType.Full:
+                abandon_record(header_offset, "record without its last fragment")
+                yield block_offset + data_start, data
+            elif block_type == LogEntryType.First:
+                abandon_record(header_offset, "record without its last fragment")
+                in_record = True
+                record_start = header_offset
+                data_offset = block_offset + data_start
+                fragments = [data]
+            elif block_type in (LogEntryType.Middle, LogEntryType.Last):
+                if not in_record:
+                    skip(header_offset, LogFile.LOG_ENTRY_HEADER_SIZE + length,
+                         "fragment without the start of its record")
+                    continue
+                fragments.append(data)
+                if block_type == LogEntryType.Last:
+                    in_record = False
+                    yield data_offset, b"".join(fragments)
+            else:
+                abandon_record(header_offset, "record interrupted by damaged data")
+                skip(header_offset, LogFile.LOG_ENTRY_HEADER_SIZE + length, f"unknown record type {block_type}")
+
+    abandon_record(end_of_file, "incomplete record at the end of the file")
+
+
 class LogFile:
     """A levelDb log (.log) file"""
     LOG_ENTRY_HEADER_SIZE = 7
@@ -285,6 +385,9 @@ class LogFile:
         self.path = file
         self.file_no = int(file.stem, 16)
 
+        # What the last iteration of this file had to skip; empty if it read cleanly.
+        self.damage: typing.List[LogDamage] = []
+
         self._f = file.open("rb")
 
     def _get_raw_blocks(self) -> typing.Iterable[bytes]:
@@ -294,47 +397,38 @@ class LogFile:
             yield chunk
 
     def _get_batches(self) -> typing.Iterable[typing.Tuple[int, bytes]]:
-        in_record = False
-        start_block_offset = 0
-        block = b""
-        for idx, chunk_ in enumerate(self._get_raw_blocks()):
-            with io.BytesIO(chunk_) as buff:
-                while buff.tell() < LogFile.LOG_BLOCK_SIZE - 6:
-                    header = buff.read(7)
-                    if len(header) < 7:
-                        break
-                    crc, length, block_type = struct.unpack("<IHB", header)
+        yield from _read_log_batches(self._get_raw_blocks(), self.path, self.damage)
 
-                    if block_type == LogEntryType.Full:
-                        if in_record:
-                            raise ValueError(f"Full block whilst still building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        in_record = False
-                        yield idx * LogFile.LOG_BLOCK_SIZE + buff.tell(), buff.read(length)
-                    elif block_type == LogEntryType.First:
-                        if in_record:
-                            raise ValueError(f"First block whilst still building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        start_block_offset = idx * LogFile.LOG_BLOCK_SIZE + buff.tell()
-                        block = buff.read(length)
-                        in_record = True
-                    elif block_type == LogEntryType.Middle:
-                        if not in_record:
-                            raise ValueError(f"Middle block whilst not building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        block += buff.read(length)
-                    elif block_type == LogEntryType.Last:
-                        if not in_record:
-                            raise ValueError(f"Last block whilst not building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        block += buff.read(length)
-                        in_record = False
-                        yield start_block_offset, block
-                    else:
-                        raise ValueError()  # Cannot happen
+    @staticmethod
+    def _read_batch_entry(buff: typing.BinaryIO) -> typing.Optional[typing.Tuple[KeyState, bytes, bytes]]:
+        """Read one entry of a write batch, or return None if the batch ends before it does."""
+        raw_state = buff.read(1)
+        # leveldb writes only these two tags; anything else means the batch is damaged.
+        if len(raw_state) < 1 or raw_state[0] not in (KeyState.Deleted.value, KeyState.Live.value):
+            return None
+        state = KeyState(raw_state[0])
+
+        key_length = read_le_varint(buff, is_google_32bit=True)
+        if key_length is None:
+            return None
+        key = buff.read(key_length)
+        if len(key) < key_length:
+            return None
+
+        value = b""
+        if state != KeyState.Deleted:
+            value_length = read_le_varint(buff, is_google_32bit=True)
+            if value_length is None:
+                return None
+            value = buff.read(value_length)
+            if len(value) < value_length:
+                return None
+
+        return state, key, value
 
     def __iter__(self) -> typing.Iterable[Record]:
-        """Iterate Records in this Log file"""
+        """Iterate Records in this Log file. Afterwards, `damage` lists anything that had to be skipped."""
+        self.damage.clear()
         for batch_offset, batch in self._get_batches():
             # as per write_batch and write_batch_internal
             # offset       length      description
@@ -351,19 +445,21 @@ class LogFile:
 
             with io.BytesIO(batch) as buff:  # it's just easier this way
                 header = buff.read(12)
+                if len(header) < 12:
+                    _record_damage(self.damage, self.path, batch_offset, len(batch),
+                                   "write batch shorter than its 12-byte header")
+                    continue
                 seq, count = struct.unpack("<QI", header)
 
                 for i in range(count):
                     start_offset = batch_offset + buff.tell()
-                    state = KeyState(buff.read(1)[0])
-                    key_length = read_le_varint(buff, is_google_32bit=True)
-                    key = buff.read(key_length)
-                    # print(key)
-                    if state != KeyState.Deleted:
-                        value_length = read_le_varint(buff, is_google_32bit=True)
-                        value = buff.read(value_length)
-                    else:
-                        value = b""
+                    entry = self._read_batch_entry(buff)
+                    if entry is None:
+                        # As in leveldb, the entries before this one stand.
+                        _record_damage(self.damage, self.path, start_offset, len(batch) - (start_offset - batch_offset),
+                                       f"write batch cut short at entry {i + 1} of {count}")
+                        break
+                    state, key, value = entry
 
                     yield Record.log_record(key, value, seq + i, state, self.path, start_offset)
 
@@ -475,6 +571,9 @@ class ManifestFile:
         self._f = path.open("rb")
         self.path = path
 
+        # What the last iteration of this file had to skip; empty if it read cleanly.
+        self.damage: typing.List[LogDamage] = []
+
         self.file_to_level = {}
         for edit in self:
             if edit.new_files:
@@ -490,46 +589,10 @@ class ManifestFile:
             yield chunk
 
     def _get_batches(self) -> typing.Iterable[typing.Tuple[int, bytes]]:
-        in_record = False
-        start_block_offset = 0
-        block = b""
-        for idx, chunk_ in enumerate(self._get_raw_blocks()):
-            with io.BytesIO(chunk_) as buff:
-                while buff.tell() < LogFile.LOG_BLOCK_SIZE - 6:
-                    header = buff.read(7)
-                    if len(header) < 7:
-                        break
-                    crc, length, block_type = struct.unpack("<IHB", header)
-
-                    if block_type == LogEntryType.Full:
-                        if in_record:
-                            raise ValueError(f"Full block whilst still building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        in_record = False
-                        yield idx * LogFile.LOG_BLOCK_SIZE + buff.tell(), buff.read(length)
-                    elif block_type == LogEntryType.First:
-                        if in_record:
-                            raise ValueError(f"First block whilst still building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        start_block_offset = idx * LogFile.LOG_BLOCK_SIZE + buff.tell()
-                        block = buff.read(length)
-                        in_record = True
-                    elif block_type == LogEntryType.Middle:
-                        if not in_record:
-                            raise ValueError(f"Middle block whilst not building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        block += buff.read(length)
-                    elif block_type == LogEntryType.Last:
-                        if not in_record:
-                            raise ValueError(f"Last block whilst not building a block at offset "
-                                             f"{idx * LogFile.LOG_BLOCK_SIZE + buff.tell()} in {self.path}")
-                        block += buff.read(length)
-                        in_record = False
-                        yield start_block_offset, block
-                    else:
-                        raise ValueError()  # Cannot happen
+        yield from _read_log_batches(self._get_raw_blocks(), self.path, self.damage)
 
     def __iter__(self):
+        self.damage.clear()
         for batch_offset, batch in self._get_batches():
             yield VersionEdit.from_buffer(batch)
 
