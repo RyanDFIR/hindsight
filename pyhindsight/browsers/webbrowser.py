@@ -306,11 +306,39 @@ class ProcessingDisplay:
 
         sizes_before = self.browser.collection_sizes()
         self.browser.last_open_failure = None
-        returned = func(*args, **kwargs)
+        parser_error = None
+        try:
+            returned = func(*args, **kwargs)
+        except Exception as e:
+            # A parser that raises must not cost the analyst the report for every other
+            # artifact, as a damaged LevelDB log did in issue #374. The traceback goes to
+            # the log for whoever fixes the parser. The corpus baselines record each
+            # artifact's status, so a parser that starts raising still fails those tests.
+            log.exception(f' - {display_label}: the parser raised an error')
+            reason = f'{type(e).__name__}: {e}' if str(e) else type(e).__name__
+            parser_error = f'parser error ({reason})'
+            returned = None
         sizes_after = self.browser.collection_sizes()
         open_failure = self.browser.last_open_failure
 
-        if returned is None:
+        delivered = sum(max(0, sizes_after.get(name, 0) - sizes_before.get(name, 0))
+                        for name in sizes_after)
+        if parser_error and delivered:
+            # Records the parser delivered before it raised are real and stay in the
+            # output. What it never reached is unknown, which is what an unparsed
+            # source means.
+            log.warning(f' - Unparsed source in {count_key}: {parser_error}')
+            result = self.browser.record_artifact(
+                count_key, label=display_label, count=delivered, unparsed_sources=1,
+                status=ARTIFACT_STATUS_PARTIAL, detail=parser_error)
+            cell = delivered
+        elif parser_error:
+            result = self.browser.record_artifact(
+                count_key, label=display_label, status=ARTIFACT_STATUS_FAILED,
+                detail=parser_error)
+            cell = 'Failed'
+            log.warning(f' - {display_label}: could not be read; {parser_error}')
+        elif returned is None:
             # The parser could not read its artifact. Recorded as a status, never as a
             # count of 0, so "could not read this" stays distinguishable from "read it
             # and found nothing".
@@ -459,7 +487,7 @@ class ProcessingDisplay:
         # Use a table with min_width so panel can expand for long paths
         content = rich.table.Table(show_header=False, box=None, expand=False)
         content.add_column(min_width=self.table_width, overflow="fold")
-        content.add_row(f"Path: {self.browser.profile_path}")
+        content.add_row(f"Path: {self.browser.display_profile_path}")
         content.add_row(f"Detected Browser: {self.browser.browser_name} v{self.browser.display_version}")
         return rich.align.Align.center(
             rich.panel.Panel(content, title="Profile", border_style="green", padding=(0, 2)))
@@ -495,6 +523,31 @@ class ProcessingDisplay:
         return text
 
 
+class _DisplayPathFilter(logging.Filter):
+    """Put a browser's paths back in the form they were given, in each record logged.
+
+    Installed by WebBrowser.process(). Unlike restore_display_paths(), this swaps a path
+    anywhere in the message: a log line is Hindsight's own text, not evidence.
+    """
+
+    def __init__(self, browser):
+        super().__init__()
+        self.browser = browser
+
+    def filter(self, record):
+        prefixes = self.browser.display_prefixes()
+        if prefixes:
+            try:
+                message = record.getMessage()
+            except Exception:
+                # A malformed record; logging reports it when the handler formats it.
+                return True
+            for long, given in prefixes:
+                message = message.replace(long, given)
+            record.msg, record.args = message, ()
+        return True
+
+
 class WebBrowser(object):
     def __init__(
             self, profile_path, browser_name, cache_path=None, version=None, display_version=None,
@@ -502,9 +555,17 @@ class WebBrowser(object):
         # A permissive filter by default, so a browser constructed directly (tests,
         # library use) parses everything without the caller having to supply one.
         self.artifact_filter = artifact_filter or ArtifactFilter()
-        self.profile_path = profile_path
+        # Every file is read through profile_path and cache_path, which on Windows are the
+        # extended-length form so that nothing past MAX_PATH is lost (see utils.long_path).
+        # The report names paths as they were given; process() puts that form back.
+        self.display_profile_path = profile_path
+        self.display_cache_path = cache_path
+        self.profile_path = utils.long_path(profile_path)
         self.browser_name = browser_name
-        self.cache_path = cache_path
+        self.cache_path = utils.long_path(cache_path)
+        # (read through, shown as) for any other directory a parser finds outside both,
+        # such as a Firefox cache that Windows keeps beside the profile.
+        self.display_path_aliases = []
         self.version = version
         self.display_version = display_version
         self.timezone = timezone
@@ -540,10 +601,88 @@ class WebBrowser(object):
         for anything that drives a browser directly (a library caller as well as the
         analysis session), and runs even when parsing raises.
         """
+        # The log names paths as they were given too. Parsers log the paths they read
+        # from, so the swap is made on the way out, for every record logged meanwhile.
+        log_filter = _DisplayPathFilter(self)
+        handlers = list(logging.getLogger().handlers)
+        for handler in handlers:
+            handler.addFilter(log_filter)
         try:
             return self.parse_profile(*args, **kwargs)
         finally:
-            self.remove_temp_dir()
+            # Records gathered before a failure are restored as well, for a library
+            # caller that keeps them.
+            try:
+                self.restore_display_paths()
+            finally:
+                for handler in handlers:
+                    handler.removeFilter(log_filter)
+                self.remove_temp_dir()
+
+    def display_prefixes(self):
+        """[(read through, shown as)] for each directory read through another form."""
+        pairs = [(self.profile_path, self.display_profile_path),
+                 (self.cache_path, self.display_cache_path), *self.display_path_aliases]
+        pairs = [(long, given) for long, given in pairs if long and given is not None and long != given]
+        # Longest first, so a cache inside the profile maps by its own entry.
+        return sorted(pairs, key=lambda pair: len(pair[0]), reverse=True)
+
+    def restore_display_paths(self):
+        """Report every path in the form it was given, not the form it was read through.
+
+        Parsers build paths from profile_path and cache_path, the extended-length form on
+        Windows, and records carry them: the profile, and the absolute source path of
+        many a record. That form is how the files were opened, not what the examiner
+        pointed Hindsight at, so it is swapped back here, once, rather than at each of the
+        hundred-odd places a record is built.
+
+        Only a string that starts with one of display_prefixes() changes. A value read
+        from the evidence that merely starts with \\\\?\\ is the evidence, and stays as it
+        is. Lists, dicts, tuples and Hindsight's own objects are searched at any depth, so
+        a parser that nests a path in a record is covered without having to know.
+
+        Known risk: a value from the evidence that starts with one of those directories
+        in its long form is changed too. That takes a profile analyzed in place whose
+        browser recorded its own path as \\\\?\\..., so it is unlikely, but it is a change
+        to evidence. Restoring only the fields that hold paths Hindsight built (profile,
+        source_path, source_item, ...) would rule it out. That was considered and not done
+        for now: every parser that adds a path field would have to remember to list it,
+        and one that forgot would put the long form in the report.
+        """
+        prefixes = self.display_prefixes()
+        if not prefixes:
+            return
+        seen = set()
+
+        def restored(value):
+            if isinstance(value, str):
+                for long, given in prefixes:
+                    if value.startswith(long) and value[len(long):len(long) + 1] in ('', '\\', '/'):
+                        return given + value[len(long):]
+                return value
+            if id(value) in seen:
+                return value
+            if isinstance(value, list):
+                seen.add(id(value))
+                value[:] = [restored(item) for item in value]
+            elif isinstance(value, dict):
+                seen.add(id(value))
+                for key, item in value.items():
+                    value[key] = restored(item)
+            elif isinstance(value, tuple):
+                items = [restored(item) for item in value]
+                if any(new is not old for new, old in zip(items, value)):
+                    return type(value)._make(items) if hasattr(value, '_make') else tuple(items)
+            elif (type(value).__module__.startswith('pyhindsight.')
+                    and not isinstance(value, WebBrowser) and hasattr(value, '__dict__')):
+                seen.add(id(value))
+                fields = vars(value)
+                for key, item in fields.items():
+                    fields[key] = restored(item)
+            return value
+
+        for name in RESULT_COLLECTIONS:
+            restored(getattr(self, name, None))
 
     def parse_profile(self, *args, **kwargs):
         raise NotImplementedError
@@ -884,6 +1023,11 @@ class WebBrowser(object):
             self.etag = None
             self.last_modified = None
             self.body_sha256 = None
+            # Decoded from the ETag by AnalysisSession.apply_etag_analysis.
+            self.etag_format = None
+            self.etag_modified = None
+            self.etag_size = None
+            self.etag_notes = None
 
         def create_data_summary(self):
             if not self.data:
@@ -964,6 +1108,11 @@ class WebBrowser(object):
             self.interrupt_reason = interrupt_reason
             self.etag = etag
             self.last_modified = last_modified
+            # Decoded from the ETag by AnalysisSession.apply_etag_analysis.
+            self.etag_format = None
+            self.etag_modified = None
+            self.etag_size = None
+            self.etag_notes = None
             self.chain_index = chain_index
             self.interrupt_reason_friendly = interrupt_reason_friendly
             self.danger_type_friendly = danger_type_friendly

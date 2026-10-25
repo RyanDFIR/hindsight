@@ -8,7 +8,7 @@ pyhindsight/static/web_modules/
 **/__pycache__/
 *.pyc
 *.egg-info/
-/.local/bin/buf
+/.local/
 .venv*/
 *.xlsx
 .claude/

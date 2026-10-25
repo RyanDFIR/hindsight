@@ -8,4 +8,5 @@ setuptools>=65.5.1
 tzdata>=2024.1
 xlsxwriter>=3.1
 rich>=13.0
-ccl_chromium_reader @ git+https://github.com/cclgroupltd/ccl_chromium_reader.git@ef840de30221c4d65bc96d2f4d9057e9ef2f526d
+Brotli>=1.0.9,<=1.2.0
+zstd==1.5.7.2

@@ -97,7 +97,7 @@ class TestIndexedDBRecordCap(unittest.TestCase):
 
             store = _ObjStore(record_count)
             with mock.patch(
-                    'ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB',
+                    'pyhindsight.lib.ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB',
                     return_value=_WrappedIndexDB(store)):
                 result = browser.get_indexeddb(tmp, 'IndexedDB')
             return result, store, browser.parsed_storage, store_dir_name

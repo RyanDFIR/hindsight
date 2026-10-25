@@ -55,7 +55,7 @@ class TestIndexedDBFailureReason(unittest.TestCase):
     parentheses empty (#358).
     """
 
-    def _run(self, wrapped):
+    def _run(self, wrapped, resolve_blob_refs=None):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, 'IndexedDB', 'https_example.com_0.indexeddb.leveldb'))
 
@@ -63,10 +63,10 @@ class TestIndexedDBFailureReason(unittest.TestCase):
             browser.profile_path = tmp
             browser.parsed_storage = []
             browser.indexeddb_max_records_per_store = None
-            browser.resolve_indexeddb_blob_refs = lambda record, origin: record.value
+            browser.resolve_indexeddb_blob_refs = resolve_blob_refs or (lambda record, origin: record.value)
 
             with _WarningCapture() as captured, mock.patch(
-                    'ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB', return_value=wrapped):
+                    'pyhindsight.lib.ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB', return_value=wrapped):
                 result = browser.get_indexeddb(tmp, 'IndexedDB')
             return result, browser.parsed_storage, captured.messages
 
@@ -85,6 +85,22 @@ class TestIndexedDBFailureReason(unittest.TestCase):
         self.assertIn('1 records read from this object store before the failure', failure[0])
         self.assertNotIn('82 records', failure[0])
         self.assertNotIn('83 records', failure[0])
+
+    def test_a_record_whose_own_handling_fails_is_not_counted_as_read(self):
+        # The failure is in Hindsight's handling of the third record, not in ccl.
+        def resolve_blob_refs(record, origin):
+            if record.ldb_seq_no == 2:
+                raise KeyError('blob')
+            return record.value
+
+        database = _Database({'certs': _ObjStore(5)})
+
+        _, parsed, messages = self._run(_WrappedIndexDB(database), resolve_blob_refs)
+
+        self.assertEqual(2, len(parsed))
+        failure = [m for m in messages if '.certs' in m]
+        self.assertEqual(1, len(failure), messages)
+        self.assertIn('2 records read from this object store before the failure', failure[0])
 
     def test_an_exception_with_no_message_is_named_by_its_type(self):
         database = _Database({'certs': _ObjStore(0, NotImplementedError())})
@@ -115,7 +131,7 @@ class TestIndexedDBFailureReason(unittest.TestCase):
             browser.parsed_storage = []
             browser.indexeddb_max_records_per_store = None
             with _WarningCapture() as captured, mock.patch(
-                    'ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB', wrapped):
+                    'pyhindsight.lib.ccl_chromium_reader.ccl_chromium_indexeddb.WrappedIndexDB', wrapped):
                 browser.get_indexeddb(tmp, 'IndexedDB')
 
         failure = [m for m in captured.messages if 'https_example.com_0.indexeddb.leveldb' in m]

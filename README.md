@@ -18,7 +18,6 @@ The only field you are required to complete is "Profile Path". This is the locat
 To install Hindsight (both the command line tool and the web interface), do:
 ```sh
 pip install pyhindsight
-pip install git+https://github.com/cclgroupltd/ccl_chromium_reader.git
 ```
 
 If you'd like to use the "View SQLite DB in Browser" feature in the Hindsight web interface, you'll need to run another install command:
@@ -36,18 +35,22 @@ Command Line Options:
 
 | Option         | Description                                             |
 | -------------- | ------------------------------------------------------- |
-| -i or --input  | Path to the Chrome(ium) "Default" directory |
+| -i or --input  | Path to a browser profile, or a parent directory to search recursively for profiles |
 | -o or --output | Name of the output file (without extension) |
 | -f or --format | Output format (default is XLSX, other options are SQLite and JSONL) |
 | -c or --cache  | Path to the cache directory; only needed if the directory is outside the given "input" directory. Mac systems are setup this way by default. |
-| -b or --browser_type | The type of browser the input files belong to. Supported options are Chrome (default) and Firefox.
+| -b or --browser_type | Force one browser for every profile: Chrome, Edge, Brave, Vivaldi, Firefox or Tor (case-insensitive; Chromium is an alias for Chrome). Omit to auto-detect each profile. |
 | -l or --log	 | Location Hindsight should log to (will append if exists) |
 | --log-level | How much detail to write to the log: debug, info (the default), warning or error. Use debug when reporting a bug |
 | -h or --help   | Shows these options and the default Chrome data locations |
-| -t or --timezone | Display timezone for the timestamps in XLSX output |
+| -t or --timezone | Display timezone for the timestamps in the output (all formats): an IANA name such as `Asia/Kolkata` or `America/New_York`, or an offset from UTC such as `UTC+05:30` |
 | --only or --artifacts | Only parse these artifacts (comma-separated; repeatable) |
 | --skip or --exclude | Parse everything except these artifacts (comma-separated; repeatable) |
 | --list-artifacts | Print the artifact names accepted by `--only` and `--skip`, then exit |
+
+When the input contains profiles from several browsers, omit `--browser_type` to
+let Hindsight detect each profile separately. Use the override only when you intend
+to treat every discovered profile as the specified browser.
 
 ## Selecting Which Artifacts to Parse
 
@@ -80,6 +83,21 @@ quietly produce a report covering the wrong artifacts.
 
 Note that version detection still reads the profile's database schemas, so filtering does
 not change the detected browser version.
+
+## Decoded ETags
+
+Download and cache records keep the ETag the server sent. Most web servers and object
+stores build it from the file's modification time and size, so Hindsight reads it back
+into when the file was last changed on the server and how big it was. The result is in
+the `ETag Decoded` column of the XLSX Timeline, and in the separate `etag_format`,
+`etag_modified`, `etag_size` and `etag_notes` fields of the SQLite and JSONL output.
+
+Recognized formats are nginx, Apache httpd, IIS, ASP.NET Core, Azure Blob Storage (which
+also serves GitHub release downloads), Express, Tomcat, and the MD5 and multipart ETags
+of Amazon S3. Each decode is checked against the Last-Modified header and the byte count
+stored with the same response, and the notes say which of those agreed. A decoded value
+is still what the server claimed: it is strong corroboration where it agrees with them,
+not a substitute for hashing a recovered file.
 
 ## Default Profile Paths
 
