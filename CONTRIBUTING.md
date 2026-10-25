@@ -126,6 +126,28 @@ If you would rather not download several gigabytes, that is fine. Say in the pul
 that you did not run the corpus tests, and a maintainer will regenerate any baseline your
 change moves.
 
+## Changing ccl_chromium_reader
+
+Hindsight reads caches, LevelDB, IndexedDB, Local and Session Storage, sessions and
+notifications with [ccl_chromium_reader](https://github.com/cclgroupltd/ccl_chromium_reader),
+which is bundled in `pyhindsight/lib/ccl_chromium_reader/` along with its Snappy
+decompressor, `ccl_simplesnappy`. Do not edit the bundled copy. A fix to it goes through
+Hindsight's fork, <https://github.com/hindsight-foundry/ccl_chromium_reader>:
+
+1. Make the fix on its own branch of the fork, starting from upstream's `master`, and open
+   a pull request upstream with it.
+2. Merge that branch into the fork's `hindsight` branch, which is upstream plus the fixes
+   still waiting there.
+3. Bundle the new `hindsight` commit:
+
+```
+python tools/vendor_ccl.py <commit>
+```
+
+To take new upstream work, merge upstream's `master` into `hindsight` and bundle that
+commit the same way. `VENDORED.md` in the bundled directory records the commit it came
+from, and `python tools/vendor_ccl.py --check` fails if the bundled files differ from it.
+
 ## Refreshing the Chrome schema versions
 
 Hindsight works out which Chrome version last opened a profile from the schema version

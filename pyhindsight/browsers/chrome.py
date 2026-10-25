@@ -14,7 +14,7 @@ import json
 import logging
 import puremagic
 import base64
-import ccl_chromium_reader
+from pyhindsight.lib import ccl_chromium_reader
 
 from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
@@ -1536,8 +1536,8 @@ class Chrome(WebBrowser):
         results = []
         unparsed = ParseFailures('Sessions')
 
-        from ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
-        from ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
+        from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_snss2 import SnssFile, SnssFileType, NavigationEntry
+        from pyhindsight.lib.ccl_chromium_reader.serialization_formats.ccl_easy_chromium_pickle import EasyPickleIterator
         from pyhindsight.lib.page_state import parse_page_state
 
         sessions_path = os.path.join(path, dir_name)
@@ -2064,7 +2064,7 @@ class Chrome(WebBrowser):
         # skipping the bad record. Hand it a real logger so it degrades gracefully.
         if ccl_chromium_reader.ccl_chromium_sessionstorage.log is None:
             ccl_chromium_reader.ccl_chromium_sessionstorage.log = \
-                logging.getLogger('ccl_chromium_reader.ccl_chromium_sessionstorage')
+                logging.getLogger(ccl_chromium_reader.ccl_chromium_sessionstorage.__name__)
 
         try:
             ss_ldb_records = ccl_chromium_reader.ccl_chromium_sessionstorage.SessionStoreDb(pathlib.Path(ss_path))
@@ -3230,7 +3230,7 @@ class Chrome(WebBrowser):
 
     def get_platform_notifications(self, path, dir_name):
         try:
-            from ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
+            from pyhindsight.lib.ccl_chromium_reader.ccl_chromium_notifications import NotificationReader
         except ImportError as e:
             log.exception(f' - Exception importing ccl_chromium_notifications: {e}')
             return None
