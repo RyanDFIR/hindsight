@@ -2917,7 +2917,7 @@ class Chrome(WebBrowser):
                     check_and_append_pref(prefs['browser']['clear_data'], 'passwords')
                     check_and_append_pref(prefs['browser']['clear_data'], 'form_data')
                 except Exception as e:
-                    log.exception(f' - Exception parsing Preference item: {e})')
+                    log.exception(f' - Exception parsing Preference item: {e}')
 
         append_group('Per Host Zoom Levels', 'These settings persist even when the history is cleared, and may be '
                                              'useful in some cases.')
@@ -2941,7 +2941,7 @@ class Chrome(WebBrowser):
                         check_and_append_pref(prefs['profile']['per_host_zoom_levels'], zoom,
                                               zoom_level_to_zoom_factor(zoom))
                 except Exception as e:
-                    log.exception(f' - Exception parsing Preference item: {e})')
+                    log.exception(f' - Exception parsing Preference item: {e}')
 
         if prefs.get('partition'):
             if prefs['partition'].get('per_host_zoom_levels'):
@@ -2969,7 +2969,7 @@ class Chrome(WebBrowser):
                                 timestamped_preference_item.source_item = source_item
                                 timestamped_preference_items.append(timestamped_preference_item)
                 except Exception as e:
-                    log.exception(f' - Exception parsing Preference item: {e})')
+                    log.exception(f' - Exception parsing Preference item: {e}')
 
         if prefs.get('password_manager'):
             if prefs['password_manager'].get('profile_store_date_last_used_for_filling'):
@@ -2993,7 +2993,7 @@ class Chrome(WebBrowser):
                             # Adding the space before the domain prevents Excel from freaking out...  idk.
                             append_pref(' '+str(pair), str(prefs['profile']['content_settings']['pattern_pairs'][pair]))
                     except Exception as e:
-                        log.exception(f' - Exception parsing Preference item: {e})')
+                        log.exception(f' - Exception parsing Preference item: {e}')
 
                 if prefs['profile']['content_settings'].get('exceptions'):
 
@@ -3056,7 +3056,7 @@ class Chrome(WebBrowser):
                                         timestamped_preference_items.append(engagement_item)
 
                         except Exception as e:
-                            log.exception(f' - Exception parsing Preference item: {e})')
+                            log.exception(f' - Exception parsing Preference item: {e}')
 
                 if prefs['profile']['content_settings'].get('permission_actions'):
                     permission_action_enum = {
@@ -3123,7 +3123,7 @@ class Chrome(WebBrowser):
                         pref_item.source_item = source_item
                         timestamped_preference_items.append(pref_item)
                 except Exception as e:
-                    log.exception(f' - Exception parsing Preference item: {e})')
+                    log.exception(f' - Exception parsing Preference item: {e}')
 
         if prefs.get('sessions'):
             if prefs['sessions'].get('event_log'):
@@ -3165,7 +3165,7 @@ class Chrome(WebBrowser):
                     pref_item.source_item = source_item
                     timestamped_preference_items.append(pref_item)
                 except Exception as e:
-                    log.exception(f' - Exception parsing Preference item: {e})')
+                    log.exception(f' - Exception parsing Preference item: {e}')
 
         if prefs.get('sync'):
             append_group('Sync Settings')
@@ -3207,7 +3207,7 @@ class Chrome(WebBrowser):
                     pref_item.source_item = source_item
                     timestamped_preference_items.append(pref_item)
             except Exception as e:
-                log.exception(f' - Exception parsing Preference item: {e})')
+                log.exception(f' - Exception parsing Preference item: {e}')
 
         if prefs.get('profile'):
             if prefs['profile'].get('creation_time'):
@@ -3221,7 +3221,7 @@ class Chrome(WebBrowser):
                     pref_item.source_item = source_item
                     timestamped_preference_items.append(pref_item)
                 except Exception as e:
-                    log.exception(f' - Exception parsing Preference item: {e})')
+                    log.exception(f' - Exception parsing Preference item: {e}')
 
         # There are multiple instances of a preference item with the key as a descriptive name
         # and the value as a timestamp. Try to parse these generically (with a timestamp "floor"
@@ -4076,7 +4076,7 @@ class Chrome(WebBrowser):
         except Exception as e:
             # Reaching here means the cache itself (its index or key list) could not be
             # walked, not one entry. Keep whatever was read before it failed.
-            log.error(f' - Exception parsing Cache items: {e})', exc_info=True)
+            log.error(f' - Exception parsing Cache items: {e}', exc_info=True)
             if not results:
                 return None
             unparsed.source(source_item, f'cache stopped being readable part way through ({utils.describe_exception(e)})')
