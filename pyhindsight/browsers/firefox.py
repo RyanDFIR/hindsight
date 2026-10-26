@@ -1143,7 +1143,21 @@ class Firefox(WebBrowser):
                 'updateDate': update_ms,
             }
 
-            results.append(Firefox.BrowserExtension(
+            if user_disabled:
+                state = 'Disabled by user'
+            elif app_disabled:
+                state = 'Disabled by Firefox'
+            elif active:
+                state = 'Enabled'
+            elif active is False:
+                state = 'Not active'
+            else:
+                state = None
+
+            # Also set the fields Chrome fills from Secure Preferences, so the
+            # Extensions worksheet shows them for both browsers. ms -> PRTime us so
+            # to_datetime hits its 16-digit branch.
+            ext = Firefox.BrowserExtension(
                 profile=self.profile_path,
                 ext_id=ext_id,
                 name=name,
@@ -1151,22 +1165,16 @@ class Firefox(WebBrowser):
                 version=version,
                 permissions=permissions_str,
                 manifest=json.dumps(manifest_summary),
-            ))
+                install_time=utils.to_datetime(install_ms * 1000, self.timezone) if install_ms else None,
+                update_time=utils.to_datetime(update_ms * 1000, self.timezone) if update_ms else None,
+                location=location or None,
+                state=state,
+            )
+            ext.signed_state = signed_state if signed_state_raw is not None else None
+            results.append(ext)
 
-
-        presentation = {
-            'title': 'Installed Extensions',
-            'columns': [
-                {'display_name': 'Extension Name', 'data_name': 'name', 'display_width': 26},
-                {'display_name': 'Description', 'data_name': 'description', 'display_width': 60},
-                {'display_name': 'Version', 'data_name': 'version', 'display_width': 10},
-                {'display_name': 'App ID', 'data_name': 'ext_id', 'display_width': 40},
-                {'display_name': 'Profile Folder', 'data_name': 'profile', 'display_width': 30},
-                {'display_name': 'Permissions', 'data_name': 'permissions', 'display_width': 45},
-                {'display_name': 'Manifest', 'data_name': 'manifest', 'display_width': 80},
-            ],
-        }
-        self.installed_extensions = {'data': results, 'presentation': presentation}
+        # No 'presentation': the Extensions worksheet renders both browsers' extensions.
+        self.installed_extensions = {'data': results}
         return len(results)
 
     # Firefox 'sizemode' -> the Chrome-style window state labels the Sessions sheet uses.
@@ -3136,7 +3144,10 @@ class Firefox(WebBrowser):
         pass
 
     class BrowserExtension(WebBrowser.BrowserExtension):
-        pass
+        @property
+        def source(self):
+            # The base class reports Chrome's disk / Secure Preferences presence.
+            return 'extensions.json'
 
     class SessionItem(WebBrowser.SessionItem):
         pass
