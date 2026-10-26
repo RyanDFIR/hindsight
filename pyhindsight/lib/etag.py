@@ -168,8 +168,8 @@ def _decode_azure(value, ctx):
 
 
 def _decode_microsoft_distribute(value, ctx):
-    # Microsoft's download servers (Visual Studio, Windows ISOs). Not a time, and not
-    # the file's SHA-256, which is in the download URL.
+    # Microsoft's download servers (Visual Studio, .NET, Windows ISOs). Not a time, and
+    # not the file's SHA-256 (which Visual Studio download URLs carry).
     if not re.fullmatch(r'0x[0-9A-Fa-f]{64}', value):
         return []
     return [_Candidate('Microsoft Distribute (0x + 256 bits)',
