@@ -29,9 +29,11 @@ classifiers = [
 ]
 
 # ccl_chromium_reader is bundled (see tools/vendor_ccl.py), so it is not listed here.
-# Brotli and zstd are its dependencies, with the bounds it declares.
+# Brotli and zstd are its dependencies. zstd has the bounds ccl declares. ccl caps
+# Brotli at 1.2.0, but 1.2.1 fixes an out-of-bounds write in the decoder, which
+# Hindsight runs on cache bodies from the evidence, so the floor is set past ccl's cap.
 dependencies = [
-    "Brotli>=1.0.9,<=1.2.0",
+    "Brotli>=1.2.1,<1.3",
     "zstd==1.5.7.2",
     "bottle>=0.12.18",
     "keyring>=21.2.1",
