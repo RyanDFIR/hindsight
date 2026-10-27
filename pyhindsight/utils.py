@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 # Seconds between the Windows/Webkit epoch (1601-01-01) and the Unix epoch.
 WEBKIT_EPOCH_OFFSET_SECONDS = 11644473600
 
+WEBKIT_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=datetime.UTC)
+UNIX_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
+
 # Above this, a Webkit microsecond value is past datetime.max even after the epoch
 # offset is applied, so there is no date to convert it to and it gets clamped.
 #
@@ -232,39 +235,52 @@ def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False,
             if timezone is not None:
                 return timestamp.astimezone(timezone)
             return timestamp
+
+        # Keep an integer as an integer. A WebKit microsecond value of today's size has
+        # more digits than a double holds (float(13363303391354559) is ...560), and
+        # dividing down to float seconds loses more, so a float conversion lands a
+        # microsecond or two off the stored value. A float input (some Preferences values
+        # are fractional seconds) has no more precision to keep and is used as-is.
+        value = None
+        if isinstance(timestamp, (int, str, bytes)):
+            try:
+                value = int(timestamp)
+            except ValueError:
+                pass  # e.g. '1.5'; falls back to the float below
+
         try:
             timestamp = float(timestamp)
         except Exception as e:
             if not quiet:
                 log.warning(f'Exception parsing {timestamp} to datetime: {e}')
             return unconvertible()
+        if value is None:
+            value = timestamp
+
+        # The sub-second units below are added to their epoch as a timedelta, which takes
+        # an int exactly (and rounds a float to the nearest microsecond), rather than
+        # divided down to float seconds first.
 
         # Very big Webkit microseconds (18 digits), most often cookie expiry dates.
         if timestamp >= MAX_CONVERTIBLE_WEBKIT_MICROSECONDS and not quiet:
             new_timestamp = datetime.datetime.max
             log.warning(f'Timestamp value {timestamp} is too large to convert; replaced with {datetime.datetime.max}')
 
-        # Microsecond timestamps past 2038 can be problematic with datetime.fromtimestamp(timestamp).
-        elif timestamp > 13700000000000000:
-            new_timestamp = datetime.datetime.fromtimestamp(0, datetime.UTC) \
-                            + datetime.timedelta(seconds=(timestamp / 1000000)
-                                                 - WEBKIT_EPOCH_OFFSET_SECONDS)
-
         # Webkit microseconds (17 digits)
         elif timestamp > 12000000000000000:  # ts > 1981
-            new_timestamp = datetime.datetime.fromtimestamp((timestamp / 1000000) - 11644473600, datetime.UTC)
+            new_timestamp = WEBKIT_EPOCH + datetime.timedelta(microseconds=value)
 
         # Epoch microseconds (16 digits)
         elif 2500000000000000 > timestamp > 1280000000000000:  # 2049 > ts > 2010
-            new_timestamp = datetime.datetime.fromtimestamp(timestamp / 1000000, datetime.UTC)
+            new_timestamp = UNIX_EPOCH + datetime.timedelta(microseconds=value)
 
         # Epoch milliseconds (13 digits)
         elif 2500000000000 > timestamp > 1280000000000:  # 2049 > ts > 2010
-            new_timestamp = datetime.datetime.fromtimestamp(timestamp / 1000, datetime.UTC)
+            new_timestamp = UNIX_EPOCH + datetime.timedelta(milliseconds=value)
 
         # Webkit milliseconds (14 digits)
         elif 15000000000000 > timestamp > 12906777600000:  # 2076 > ts > 2009
-            new_timestamp = datetime.datetime.fromtimestamp((timestamp / 1000) - 11644473600, datetime.UTC)
+            new_timestamp = WEBKIT_EPOCH + datetime.timedelta(milliseconds=value)
 
         # Webkit seconds (11 digits)
         elif 15000000000 > timestamp >= 12900000000:  # 2076 > ts > 2009

@@ -131,11 +131,10 @@ def decode(user_data_key, value, timezone):
         if meta.HasField('creation_microseconds_since_unix_epoch') \
                 and meta.creation_microseconds_since_unix_epoch:
             try:
-                dt = datetime.datetime.fromtimestamp(
-                    meta.creation_microseconds_since_unix_epoch / 1_000_000.0,
-                    tz=datetime.timezone.utc)
+                dt = utils.UNIX_EPOCH + datetime.timedelta(
+                    microseconds=meta.creation_microseconds_since_unix_epoch)
                 event_time = utils.to_datetime(dt, timezone)
-            except (OverflowError, OSError, ValueError):
+            except OverflowError:
                 pass
         return ('background fetch', '; '.join(pieces), event_time)
 
