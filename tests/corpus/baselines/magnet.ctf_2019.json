@@ -1,7 +1,7 @@
 {
   "data_types": {
     "chrome:cache:entry": 7359,
-    "chrome:cookie:entry": 201,
+    "chrome:cookie:entry": 202,
     "chrome:extension:installed": 32,
     "chrome:extension_storage:entry": 2,
     "chrome:history:file_downloaded": 5,
@@ -19,7 +19,7 @@
     "chrome:sync_data:entry": 2
   },
   "generated_by": {
-    "generated_utc": "2026-09-04T17:01:54Z",
+    "generated_utc": "2026-10-27T13:56:48Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -163,7 +163,7 @@
           "unparsed_sources": 0
         },
         "Cookies": {
-          "count": 94,
+          "count": 95,
           "status": null,
           "unparsed_records": 0,
           "unparsed_sources": 0
@@ -281,5 +281,5 @@
     }
   },
   "root": "magnet.ctf_2019",
-  "total_records": 9792
+  "total_records": 9793
 }

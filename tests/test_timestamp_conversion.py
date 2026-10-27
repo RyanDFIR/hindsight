@@ -39,7 +39,7 @@ class TestClampBound(unittest.TestCase):
         for value, expected in (
                 (265046731200000000, datetime.datetime(9999, 12, 31, 12, 0, tzinfo=UTC)),
                 (265046773601599970,
-                 datetime.datetime(9999, 12, 31, 23, 46, 41, 599976, tzinfo=UTC)),
+                 datetime.datetime(9999, 12, 31, 23, 46, 41, 599970, tzinfo=UTC)),
         ):
             with self.subTest(value=value):
                 self.assertEqual(to_datetime(value, UTC), expected)
@@ -67,6 +67,46 @@ class TestClampBound(unittest.TestCase):
                          datetime.datetime(2012, 12, 14, 23, 6, 40, tzinfo=UTC))
         self.assertEqual(to_datetime(1655000000000000, UTC),
                          datetime.datetime(2022, 6, 12, 2, 13, 20, tzinfo=UTC))
+
+
+class TestExactIntegerConversion(unittest.TestCase):
+    """Integer timestamps keep the stored microsecond (issue #393).
+
+    Dividing a WebKit microsecond value down to float seconds needs more digits than a
+    double has, so the old conversion landed up to 2 µs away from the stored value.
+    """
+
+    WEBKIT_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=UTC)
+    UNIX_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=UTC)
+
+    def test_webkit_microseconds_from_the_issue(self):
+        # visits.visit_time values from the report, plus the two .000001 cases; the last
+        # one goes through the post-2038 branch.
+        for value in (13363303391354559, 13363303434568034, 13363329262761629,
+                      13400000000000001, 13800000000000001):
+            with self.subTest(value=value):
+                expected = self.WEBKIT_EPOCH + datetime.timedelta(microseconds=value)
+                self.assertEqual(to_datetime(value, UTC), expected)
+                self.assertEqual(to_datetime(str(value), UTC), expected)
+
+    def test_other_integer_branches(self):
+        for value, expected in (
+                (1655000000123457,
+                 self.UNIX_EPOCH + datetime.timedelta(microseconds=1655000000123457)),
+                (1655000000123,
+                 self.UNIX_EPOCH + datetime.timedelta(milliseconds=1655000000123)),
+                (13300000000123,
+                 self.WEBKIT_EPOCH + datetime.timedelta(milliseconds=13300000000123)),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(to_datetime(value, UTC), expected)
+
+    def test_float_input_still_converts(self):
+        # A float has no extra precision to keep; it takes the float path.
+        self.assertEqual(to_datetime(1655000000.5, UTC),
+                         datetime.datetime(2022, 6, 12, 2, 13, 20, 500000, tzinfo=UTC))
+        self.assertEqual(to_datetime('1655000000.5', UTC),
+                         datetime.datetime(2022, 6, 12, 2, 13, 20, 500000, tzinfo=UTC))
 
 
 if __name__ == '__main__':

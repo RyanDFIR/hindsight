@@ -3,7 +3,7 @@
     "chrome:autofill:entry": 22,
     "chrome:bookmark:entry": 2,
     "chrome:cache:entry": 17764,
-    "chrome:cookie:entry": 5570,
+    "chrome:cookie:entry": 5725,
     "chrome:extension:installed": 16,
     "chrome:extension_storage:entry": 19522,
     "chrome:file_system:entry": 3,
@@ -29,7 +29,7 @@
     "chrome:sync_data:entry": 8354
   },
   "generated_by": {
-    "generated_utc": "2026-10-25T20:25:16Z",
+    "generated_utc": "2026-10-27T13:56:44Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -54,7 +54,7 @@
           "unparsed_sources": 0
         },
         "Cookies": {
-          "count": 5333,
+          "count": 5482,
           "status": null,
           "unparsed_records": 0,
           "unparsed_sources": 0
@@ -263,7 +263,7 @@
           "unparsed_sources": 0
         },
         "Cookies": {
-          "count": 237,
+          "count": 243,
           "status": null,
           "unparsed_records": 0,
           "unparsed_sources": 0
@@ -423,5 +423,5 @@
     }
   },
   "root": "bf4sa_2026_bob-2",
-  "total_records": 80009
+  "total_records": 80164
 }
