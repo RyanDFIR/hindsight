@@ -189,7 +189,7 @@ class TestSessionWindowsSqlite(unittest.TestCase):
             session, 'SELECT window_id, browser, timestamp, window_state, x, y, width, height, active, tab_count '
                      'FROM session_windows ORDER BY window_id')
         self.assertEqual([
-            ('11', 'Chrome', '2026-09-22 18:07:00.000', 'Maximized', 30, 30, 1247, 1012, 1, 3),
+            ('11', 'Chrome', '2026-09-22 18:07:00', 'Maximized', 30, 30, 1247, 1012, 1, 3),
             # No navigations: no time, rather than the epoch.
             ('20', 'Chrome', None, 'Normal', None, None, None, None, 0, 1),
         ], windows)

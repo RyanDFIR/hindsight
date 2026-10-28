@@ -29,7 +29,8 @@ def _unix_ms_to_tz(ms, timezone):
     """Convert Unix-epoch milliseconds (e.g. JS Date.now()) to a datetime in
     the report's timezone. Returns None on overflow / bad input."""
     try:
-        dt = datetime.datetime.fromtimestamp(ms / 1000.0, tz=datetime.timezone.utc)
+        dt = utils.with_precision(
+            datetime.datetime.fromtimestamp(ms / 1000.0, tz=datetime.timezone.utc), 'ms')
         return utils.to_datetime(dt, timezone)
     except (OverflowError, OSError, ValueError):
         return None

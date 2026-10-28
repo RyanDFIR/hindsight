@@ -20,6 +20,66 @@ WEBKIT_EPOCH_OFFSET_SECONDS = 11644473600
 WEBKIT_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=datetime.UTC)
 UNIX_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
 
+
+# A datetime doesn't record how precise its source was, so a millisecond value and a
+# microsecond one that happens to end in 000 look the same. These subclasses carry the
+# source's precision in their type, which (unlike an instance attribute) survives
+# astimezone(), replace(), arithmetic, copy and pickle. They compare and hash as plain
+# datetimes; only formatting reads the precision. A plain datetime means it's unknown.
+_TIMESPECS = ('seconds', 'milliseconds', 'microseconds')
+
+
+class _PreciseDatetime(datetime.datetime):
+    timespec = None
+
+    def isoformat(self, sep='T', timespec='auto'):
+        if timespec == 'auto':
+            timespec = output_timespec(self)
+        return super().isoformat(sep, timespec)
+
+
+class SecondsDatetime(_PreciseDatetime):
+    timespec = 'seconds'
+
+
+class MillisecondsDatetime(_PreciseDatetime):
+    timespec = 'milliseconds'
+
+
+class MicrosecondsDatetime(_PreciseDatetime):
+    timespec = 'microseconds'
+
+
+_PRECISION_CLASSES = {'s': SecondsDatetime, 'ms': MillisecondsDatetime, 'us': MicrosecondsDatetime}
+
+
+def with_precision(dt, precision):
+    """Return dt marked with its source's precision: 's', 'ms' or 'us'."""
+    if dt is None or dt in (datetime.datetime.max, datetime.datetime.min):
+        return dt
+    return _PRECISION_CLASSES[precision](
+        dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, dt.microsecond,
+        dt.tzinfo, fold=dt.fold)
+
+
+def output_timespec(dt):
+    """How many fraction digits to write for dt, never dropping any it has.
+
+    A marked datetime gets its source's precision, widened if the value holds finer
+    digits than that (arithmetic on it, or a fractional input). An unmarked one gets the
+    isoformat() rule: no fraction when the microsecond is 0, otherwise all six digits.
+    """
+    if dt.microsecond == 0:
+        needed = 'seconds'
+    elif dt.microsecond % 1000 == 0:
+        needed = 'milliseconds'
+    else:
+        needed = 'microseconds'
+    declared = getattr(dt, 'timespec', None)
+    if declared is None:
+        return 'seconds' if needed == 'seconds' else 'microseconds'
+    return max(declared, needed, key=_TIMESPECS.index)
+
 # Above this, a Webkit microsecond value is past datetime.max even after the epoch
 # offset is applied, so there is no date to convert it to and it gets clamped.
 #
@@ -261,6 +321,8 @@ def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False,
         # an int exactly (and rounds a float to the nearest microsecond), rather than
         # divided down to float seconds first.
 
+        # Each branch marks the result with its unit's precision (see with_precision).
+
         # Very big Webkit microseconds (18 digits), most often cookie expiry dates.
         if timestamp >= MAX_CONVERTIBLE_WEBKIT_MICROSECONDS and not quiet:
             new_timestamp = datetime.datetime.max
@@ -268,28 +330,34 @@ def to_datetime(timestamp, timezone=None, quiet=False, none_if_unset=False,
 
         # Webkit microseconds (17 digits)
         elif timestamp > 12000000000000000:  # ts > 1981
-            new_timestamp = WEBKIT_EPOCH + datetime.timedelta(microseconds=value)
+            new_timestamp = with_precision(
+                WEBKIT_EPOCH + datetime.timedelta(microseconds=value), 'us')
 
         # Epoch microseconds (16 digits)
         elif 2500000000000000 > timestamp > 1280000000000000:  # 2049 > ts > 2010
-            new_timestamp = UNIX_EPOCH + datetime.timedelta(microseconds=value)
+            new_timestamp = with_precision(
+                UNIX_EPOCH + datetime.timedelta(microseconds=value), 'us')
 
         # Epoch milliseconds (13 digits)
         elif 2500000000000 > timestamp > 1280000000000:  # 2049 > ts > 2010
-            new_timestamp = UNIX_EPOCH + datetime.timedelta(milliseconds=value)
+            new_timestamp = with_precision(
+                UNIX_EPOCH + datetime.timedelta(milliseconds=value), 'ms')
 
         # Webkit milliseconds (14 digits)
         elif 15000000000000 > timestamp > 12906777600000:  # 2076 > ts > 2009
-            new_timestamp = WEBKIT_EPOCH + datetime.timedelta(milliseconds=value)
+            new_timestamp = with_precision(
+                WEBKIT_EPOCH + datetime.timedelta(milliseconds=value), 'ms')
 
         # Webkit seconds (11 digits)
         elif 15000000000 > timestamp >= 12900000000:  # 2076 > ts > 2009
-            new_timestamp = datetime.datetime.fromtimestamp(timestamp - 11644473600, datetime.UTC)
+            new_timestamp = with_precision(
+                datetime.datetime.fromtimestamp(timestamp - 11644473600, datetime.UTC), 's')
 
         # Epoch seconds (10 digits typically, but could be less)
         else:
             try:
-                new_timestamp = datetime.datetime.fromtimestamp(timestamp, datetime.UTC)
+                new_timestamp = with_precision(
+                    datetime.datetime.fromtimestamp(timestamp, datetime.UTC), 's')
             except OSError as e:
                 log.warning(f'Exception parsing {timestamp} to datetime: {e}; '
                             f'common issue is value is too big for the OS to convert it')
@@ -458,12 +526,21 @@ def parse_timezone(value):
 
 
 def friendly_date(timestamp):
+    """Format a time for XLSX and SQLite with as many fraction digits as its source has.
+
+    See output_timespec. The offset is left off; the report's timezone covers it.
+    """
     if isinstance(timestamp, (str, int)):
-        return to_datetime(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        timestamp = to_datetime(timestamp)
     elif timestamp is None:
         return ''
-    else:
-        return timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    timespec = output_timespec(timestamp)
+    text = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+    if timespec == 'milliseconds':
+        text += f'.{timestamp.microsecond // 1000:03d}'
+    elif timespec == 'microseconds':
+        text += f'.{timestamp.microsecond:06d}'
+    return text
 
 
 def describe_exception(e):

@@ -71,7 +71,7 @@ class TestSqliteDateNulls(unittest.TestCase):
 
     def test_aggregates_ignore_undated_rows(self):
         self.assertEqual(self._one('SELECT MIN(timestamp) FROM timeline'),
-                         '2024-06-01 00:00:00.000')
+                         '2024-06-01 00:00:00')
         self.assertEqual(self._one('SELECT COUNT(timestamp) FROM timeline'), 1)
         self.assertEqual(self._one('SELECT COUNT(*) FROM timeline'), 2)
 

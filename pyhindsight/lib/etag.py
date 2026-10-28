@@ -49,7 +49,9 @@ import hashlib
 import itertools
 import re
 
-UTC = datetime.timezone.utc
+from pyhindsight import utils
+
+UTC =datetime.timezone.utc
 
 # A decoded time outside these bounds means the shape matched by accident: most of the
 # formats are "some hex digits", and an arbitrary hex string read as a timestamp lands
@@ -127,9 +129,16 @@ class _Context:
 
 
 def _from_epoch(epoch, value, units_per_second):
-    """`value` units after `epoch`, or None where that is not a representable date."""
+    """`value` units after `epoch`, or None where that is not a representable date.
+
+    The result is marked with the unit's precision (finer than microseconds is floored
+    to them), so whole-second formats like nginx don't show a fraction they don't have.
+    """
+    precision = 's' if units_per_second == 1 else 'ms' if units_per_second == 1000 else 'us'
     try:
-        return epoch + datetime.timedelta(microseconds=value * 1_000_000 // units_per_second)
+        return utils.with_precision(
+            epoch + datetime.timedelta(microseconds=value * 1_000_000 // units_per_second),
+            precision)
     except (OverflowError, ValueError):
         return None
 
