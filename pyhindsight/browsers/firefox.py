@@ -621,9 +621,10 @@ class Firefox(WebBrowser):
 
             source_item = utils.relpath(os.path.join(path, database), self.profile_path)
             for row in cursor:
-                # ms -> PRTime us so to_datetime hits its 16-digit branch.
+                # ms -> PRTime us so to_datetime hits its 16-digit branch, then marked
+                # as ms so the output doesn't claim microseconds.
                 mod_ms = row.get('modificationTime') or 0
-                mod_time = utils.to_datetime(mod_ms * 1000, self.timezone) if mod_ms else \
+                mod_time = utils.with_precision(utils.to_datetime(mod_ms * 1000, self.timezone), 'ms') if mod_ms else \
                     datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
 
                 perm_value = row.get('permission')
@@ -633,7 +634,7 @@ class Firefox(WebBrowser):
 
                 exp_ms = row.get('expireTime') or 0
                 if expire_type == 2 and exp_ms:
-                    expires = utils.to_datetime(exp_ms * 1000, self.timezone)
+                    expires = utils.with_precision(utils.to_datetime(exp_ms * 1000, self.timezone), 'ms')
                     interpretation = f'{expire_label}: {expires.isoformat()}'
                 else:
                     interpretation = expire_label
@@ -712,8 +713,9 @@ class Firefox(WebBrowser):
                 continue
 
             try:
-                expiry_dt = datetime.datetime.fromtimestamp(expiry_ms / 1000.0,
-                                                             datetime.timezone.utc)
+                expiry_dt = utils.with_precision(
+                    datetime.datetime.fromtimestamp(expiry_ms / 1000.0, datetime.timezone.utc),
+                    'ms')
                 if self.timezone:
                     expiry_dt = expiry_dt.astimezone(self.timezone)
                 expiry_str = expiry_dt.isoformat()
@@ -886,7 +888,7 @@ class Firefox(WebBrowser):
             def _to_dt(ms):
                 if not ms:
                     return zero_ts
-                return utils.to_datetime(ms * 1000, self.timezone)
+                return utils.with_precision(utils.to_datetime(ms * 1000, self.timezone), 'ms')
 
             interp_parts = [
                 f'GUID: {guid}',
@@ -1156,7 +1158,7 @@ class Firefox(WebBrowser):
 
             # Also set the fields Chrome fills from Secure Preferences, so the
             # Extensions worksheet shows them for both browsers. ms -> PRTime us so
-            # to_datetime hits its 16-digit branch.
+            # to_datetime hits its 16-digit branch, then marked as ms.
             ext = Firefox.BrowserExtension(
                 profile=self.profile_path,
                 ext_id=ext_id,
@@ -1165,8 +1167,8 @@ class Firefox(WebBrowser):
                 version=version,
                 permissions=permissions_str,
                 manifest=json.dumps(manifest_summary),
-                install_time=utils.to_datetime(install_ms * 1000, self.timezone) if install_ms else None,
-                update_time=utils.to_datetime(update_ms * 1000, self.timezone) if update_ms else None,
+                install_time=utils.with_precision(utils.to_datetime(install_ms * 1000, self.timezone), 'ms') if install_ms else None,
+                update_time=utils.with_precision(utils.to_datetime(update_ms * 1000, self.timezone), 'ms') if update_ms else None,
                 location=location or None,
                 state=state,
             )
@@ -1266,7 +1268,7 @@ class Firefox(WebBrowser):
                     profile=self.profile_path,
                     url=url,
                     title=title,
-                    timestamp=utils.to_datetime(tab_last_accessed_ms * 1000, self.timezone),
+                    timestamp=utils.with_precision(utils.to_datetime(tab_last_accessed_ms * 1000, self.timezone), 'ms'),
                     session_id=tab_id,
                     nav_index=nav_idx,
                     referrer_url=referrer,
@@ -1349,7 +1351,7 @@ class Firefox(WebBrowser):
                         profile=self.profile_path,
                         url=url,
                         title=entry.get('title') or '',
-                        timestamp=utils.to_datetime(ts_ms * 1000, self.timezone),
+                        timestamp=utils.with_precision(utils.to_datetime(ts_ms * 1000, self.timezone), 'ms'),
                         session_id=f'{window_id}.closed{c_idx}',
                         nav_index=nav_idx,
                         referrer_url=entry.get('referrer') or '',
@@ -1377,7 +1379,7 @@ class Firefox(WebBrowser):
                         profile=self.profile_path,
                         url=url,
                         title=entry.get('title') or '',
-                        timestamp=utils.to_datetime(ts_ms * 1000, self.timezone),
+                        timestamp=utils.with_precision(utils.to_datetime(ts_ms * 1000, self.timezone), 'ms'),
                         # No snapshot label: the same closed window recurs across
                         # snapshots, and identical rows are collapsed below.
                         session_id=f'closedwin{cw_idx}.t{t_idx}',
@@ -1582,7 +1584,7 @@ class Firefox(WebBrowser):
             for row in cursor:
                 expire_ms = row.get('expire_ms') or 0
                 if expire_ms:
-                    expire_dt = utils.to_datetime(expire_ms * 1000, self.timezone)
+                    expire_dt = utils.with_precision(utils.to_datetime(expire_ms * 1000, self.timezone), 'ms')
                 else:
                     expire_dt = zero_ts
 

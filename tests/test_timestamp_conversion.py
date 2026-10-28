@@ -1,10 +1,14 @@
+import copy
 import datetime
+import pickle
 import unittest
 
 from pyhindsight.utils import (
     MAX_CONVERTIBLE_WEBKIT_MICROSECONDS,
     WEBKIT_EPOCH_OFFSET_SECONDS,
+    friendly_date,
     to_datetime,
+    with_precision,
 )
 
 UTC = datetime.timezone.utc
@@ -107,6 +111,78 @@ class TestExactIntegerConversion(unittest.TestCase):
                          datetime.datetime(2022, 6, 12, 2, 13, 20, 500000, tzinfo=UTC))
         self.assertEqual(to_datetime('1655000000.5', UTC),
                          datetime.datetime(2022, 6, 12, 2, 13, 20, 500000, tzinfo=UTC))
+
+
+class TestOutputPrecision(unittest.TestCase):
+    """Output shows as many fraction digits as the source has, no more and no fewer."""
+
+    def test_each_unit_formats_at_its_own_precision(self):
+        for value, expected in (
+                (13363303391354559, '2024-06-19 20:43:11.354559'),  # WebKit µs
+                (13363303391000000, '2024-06-19 20:43:11.000000'),  # WebKit µs on a second
+                (1655000000123457, '2022-06-12 02:13:20.123457'),   # epoch µs
+                (1655000000123, '2022-06-12 02:13:20.123'),         # epoch ms
+                (1655000000000, '2022-06-12 02:13:20.000'),         # epoch ms on a second
+                (13300000000123, '2022-06-18 04:26:40.123'),        # WebKit ms
+                (13300000000, '2022-06-18 04:26:40'),               # WebKit seconds
+                (1655000000, '2022-06-12 02:13:20'),                # epoch seconds
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(friendly_date(to_datetime(value, UTC)), expected)
+                self.assertEqual(friendly_date(value), expected)
+
+    def test_unmarked_datetime_uses_the_isoformat_rule(self):
+        # Precision unknown: never drop digits, and don't pad whole seconds.
+        self.assertEqual(friendly_date(datetime.datetime(2024, 6, 1, tzinfo=UTC)),
+                         '2024-06-01 00:00:00')
+        self.assertEqual(friendly_date(datetime.datetime(2024, 6, 1, 0, 0, 0, 123000, tzinfo=UTC)),
+                         '2024-06-01 00:00:00.123000')
+        self.assertEqual(friendly_date(datetime.datetime(2024, 6, 1, 0, 0, 0, 123456, tzinfo=UTC)),
+                         '2024-06-01 00:00:00.123456')
+        self.assertEqual(friendly_date(None), '')
+
+    def test_finer_digits_than_declared_are_kept(self):
+        # A fractional input, or arithmetic on a marked value, must not be cut.
+        self.assertEqual(friendly_date(to_datetime(1655000000.5, UTC)), '2022-06-12 02:13:20.500')
+        later = with_precision(datetime.datetime(2024, 6, 1, tzinfo=UTC), 's') \
+            + datetime.timedelta(microseconds=7)
+        self.assertEqual(friendly_date(later), '2024-06-01 00:00:00.000007')
+
+    def test_jsonl_isoformat_follows_the_precision(self):
+        self.assertEqual(to_datetime(1655000000123, UTC).isoformat(),
+                         '2022-06-12T02:13:20.123+00:00')
+        self.assertEqual(to_datetime(1655000000, UTC).isoformat(),
+                         '2022-06-12T02:13:20+00:00')
+        self.assertEqual(to_datetime(13363303391000000, UTC).isoformat(),
+                         '2024-06-19T20:43:11.000000+00:00')
+        # An explicit timespec still wins.
+        self.assertEqual(to_datetime(1655000000, UTC).isoformat(timespec='microseconds'),
+                         '2022-06-12T02:13:20.000000+00:00')
+
+    def test_precision_survives_what_hindsight_does_to_a_time(self):
+        ms = to_datetime(1655000000000, UTC)
+        eastern = datetime.timezone(datetime.timedelta(hours=-5))
+        for name, result in (
+                ('timezone argument', to_datetime(1655000000000, eastern)),
+                ('astimezone', ms.astimezone(eastern)),
+                ('passed back through to_datetime', to_datetime(ms, eastern)),
+                ('copy', copy.copy(ms)),
+                ('pickle', pickle.loads(pickle.dumps(ms))),
+        ):
+            with self.subTest(name):
+                self.assertTrue(friendly_date(result).endswith('.000'))
+
+    def test_marked_values_compare_and_hash_as_plain_datetimes(self):
+        ms = to_datetime(1655000000000, UTC)
+        plain = datetime.datetime(2022, 6, 12, 2, 13, 20, tzinfo=UTC)
+        self.assertEqual(ms, plain)
+        self.assertEqual(hash(ms), hash(plain))
+        self.assertEqual(sorted([ms, plain + datetime.timedelta(seconds=-1)])[1], ms)
+
+    def test_clamp_and_fallback_stay_unmarked(self):
+        self.assertIs(type(to_datetime(MAX_CONVERTIBLE_WEBKIT_MICROSECONDS, UTC).replace(tzinfo=None)),
+                      datetime.datetime)
+        self.assertIs(type(to_datetime('not a time', UTC, quiet=True)), datetime.datetime)
 
 
 if __name__ == '__main__':

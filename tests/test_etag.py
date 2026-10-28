@@ -631,7 +631,7 @@ class TestOutputs(unittest.TestCase):
 
         self.assertEqual('"6ac46e19-13e7f8"', row['ETag'])
         # One readable cell; the parts are separate fields in SQLite and JSONL.
-        self.assertEqual('nginx | modified 2026-10-06 09:12:17.000 | 1,304,568 bytes | '
+        self.assertEqual('nginx | modified 2026-10-06 09:12:17 | 1,304,568 bytes | '
                          'time matches Last-Modified; size matches total bytes; '
                          'modified 1 day, 0:00:00 before the download',
                          row['ETag Decoded (Asia/Kolkata)'])
@@ -669,7 +669,7 @@ class TestOutputs(unittest.TestCase):
         con = sqlite3.connect(path)
         try:
             self.assertEqual(
-                ('nginx', '2026-10-06 09:12:17.000', 1304568),
+                ('nginx', '2026-10-06 09:12:17', 1304568),
                 con.execute('SELECT etag_format, etag_modified, etag_size FROM timeline').fetchone())
             # Appended after the existing columns, so their positions are unchanged.
             columns = [row[1] for row in con.execute('PRAGMA table_info(timeline)')]

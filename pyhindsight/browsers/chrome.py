@@ -629,6 +629,13 @@ class Chrome(WebBrowser):
                         FROM playback LEFT JOIN playbackSession 
                             ON playback.last_updated_time_s = playbackSession.last_updated_time_s'''}
 
+        def format_ms(ms):
+            # H:MM:SS.mmm. Not str(timedelta)[:-3]: str() leaves the fraction off a whole
+            # number of seconds, and cutting three characters then took the seconds.
+            delta = datetime.timedelta(milliseconds=ms)
+            whole = delta - datetime.timedelta(microseconds=delta.microseconds)
+            return f'{whole}.{delta.microseconds // 1000:03d}'
+
         source_item = utils.relpath(os.path.join(path, history_file), self.profile_path)
         with self._execute_compatible_query(path, history_file, query, version, 'Media History items') as cursor:
             if cursor is None:
@@ -639,11 +646,11 @@ class Chrome(WebBrowser):
                 if row.get('duration_ms'):
                     # Check is duration value is reasonable; some have been equivalent of 300 million years
                     if row.get('duration_ms') < 2600000:
-                        duration = str(datetime.timedelta(milliseconds=row.get('duration_ms')))[:-3]
+                        duration = format_ms(row.get('duration_ms'))
 
                 position = None
                 if row.get('position_ms'):
-                    position = str(datetime.timedelta(milliseconds=row.get('position_ms')))[:-3]
+                    position = format_ms(row.get('position_ms'))
 
                 watch_time = ' 0:00:00'
                 if row.get('watch_time_s'):
@@ -2264,9 +2271,16 @@ class Chrome(WebBrowser):
                                 idb_key = getattr(record, 'key', None)
                                 key_type = getattr(getattr(idb_key, 'key_type', None), 'name', None)
                                 raw_key = getattr(idb_key, 'raw_key', None)
+                                key_value = getattr(idb_key, 'value', None)
+                                # A Date key is a JS time in milliseconds; marking it keeps
+                                # str() from padding it to six digits. (Dates inside values
+                                # are left alone: the value is rendered with repr, which
+                                # would show the marker class's name.)
+                                if key_type == 'Date' and isinstance(key_value, datetime.datetime):
+                                    key_value = utils.with_precision(key_value, 'ms')
 
                                 results.append(Chrome.IndexedDBItem(
-                                    self.profile_path, origin, str(getattr(idb_key, 'value', None)), None,
+                                    self.profile_path, origin, str(key_value), None,
                                     int(record.ldb_seq_no), database=record.database_name,
                                     state=record_state, source_path=record_source_path,
                                     object_store=obj_store_name, key_type=key_type,

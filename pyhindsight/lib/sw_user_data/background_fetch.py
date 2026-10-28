@@ -131,8 +131,8 @@ def decode(user_data_key, value, timezone):
         if meta.HasField('creation_microseconds_since_unix_epoch') \
                 and meta.creation_microseconds_since_unix_epoch:
             try:
-                dt = utils.UNIX_EPOCH + datetime.timedelta(
-                    microseconds=meta.creation_microseconds_since_unix_epoch)
+                dt = utils.with_precision(utils.UNIX_EPOCH + datetime.timedelta(
+                    microseconds=meta.creation_microseconds_since_unix_epoch), 'us')
                 event_time = utils.to_datetime(dt, timezone)
             except OverflowError:
                 pass
