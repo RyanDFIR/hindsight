@@ -71,6 +71,8 @@ class TestRealWorldETags(unittest.TestCase):
          'ASP.NET Core', utc(2026, 10, 22, 20, 45, 34), None),
         ('www.irs.gov', '"1792680962"', 'Thu, 22 Oct 2026 14:56:02 GMT', None,
          'Unix timestamp', utc(2026, 10, 22, 14, 56, 2), None),
+        # https://www.sqlite.org/2024/sqlite-autoconf-3450100.tar.gz; althttpd.c writes
+        # the ETag with sprintf(zETag, "m%xs%x", st_mtime, st_size).
         ('www.sqlite.org (althttpd)', '"m67f42001s3153aa"', 'Mon, 07 Apr 2025 18:57:05 GMT', 3232682,
          'althttpd (SQLite)', utc(2025, 4, 7, 18, 57, 5), 3232682),
         ('www.7-zip.org', '"0x8DCBAC652C1AE4F"', 'Mon, 12 Aug 2024 12:00:13 GMT', 1624144,
@@ -112,7 +114,8 @@ class TestRealWorldETags(unittest.TestCase):
         self.assertIsNone(result.size)
 
     def test_qiniu(self):
-        # Live favicons; each hashes to its ETag.
+        # The /favicon.ico of each host, fetched in October 2026; each file hashes to its
+        # ETag. Qiniu documents the algorithm at https://github.com/qiniu/qetag.
         for source, value, last_modified, size in (
                 ('www.qiniu.com', '"FsJyZYfBt-5Ve0VqMC4lKGTfRrGE"', 'Tue, 16 Aug 2022 07:04:11 GMT', 4286),
                 ('dn-qiniu-avatar.qbox.me', '"FpFnkhvBzQRlgso9L3SxyxrZvppT"',
@@ -123,6 +126,13 @@ class TestRealWorldETags(unittest.TestCase):
                 self.assertEqual('Qiniu Kodo', result.format)
                 self.assertIsNone(result.modified)
                 self.assertEqual(['SHA-1 of the content; the file is 4 MiB or less'], result.notes)
+
+    def test_qiniu_over_4_mib(self):
+        # https://devtools.qiniu.com/qshell-v2.13.0-windows-amd64.zip, 10,467,017 bytes in
+        # three 4 MiB blocks; the file hashes to its ETag.
+        result = etag.analyze('"liAeWdsrGN5IODXDkDqGo59jtXGy"', 'Fri, 15 Dec 2023 02:51:56 GMT', 10467017)
+        self.assertEqual('Qiniu Kodo', result.format)
+        self.assertEqual(['SHA-1 of the 4 MiB blocks\' SHA-1s; the file is over 4 MiB'], result.notes)
 
     def test_a_hash_shape_alone_is_not_named_as_a_hash(self):
         # docs.aws.amazon.com is a SHA-1, learn.microsoft.com is not; GitHub avatars vary.
@@ -139,7 +149,10 @@ class TestRealWorldETags(unittest.TestCase):
                 self.assertEqual('Unrecognized', etag.analyze(value).format)
 
     def test_a_long_0x_value_is_not_read_as_azure_ticks(self):
-        # download.visualstudio.microsoft.com; the file's SHA-256 is e38048c4...e58b.
+        # https://download.visualstudio.microsoft.com/download/pr/c95450be-0a45-4779-b142-
+        # 33f567ccfd6e/e38048c45811bed66da5315aa921573a0b01cadaeb5f82b3aa183b8ad497e58b/
+        # vs_Community.exe (Server: Kestrel, X-Ms-ApiVersion: Distribute 1.2). The 64 hex
+        # digits in the URL are the file's SHA-256, which is not the ETag.
         result = etag.analyze('"0x8BC5ECAEE96421C22120ACD02B30807A560F31C892E13FC63EADECC3AC6B9C1A"',
                               'Wed, 07 Oct 2026 05:02:07 GMT', 4475728, reference_time=FETCHED)
         self.assertEqual('Microsoft Distribute (0x + 256 bits)', result.format)
