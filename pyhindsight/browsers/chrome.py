@@ -4927,6 +4927,8 @@ class Chrome(WebBrowser):
         from pyhindsight.lib.proto.components.sync.protocol.user_event_specifics_pb2 import UserEventSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.user_consent_specifics_pb2 import UserConsentSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.persisted_entity_data_pb2 import PersistedEntityData
+        from pyhindsight.lib.proto.components.sync.protocol.account_setting_specifics_pb2 import \
+            AccountSettingSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.collaboration_group_specifics_pb2 import \
             CollaborationGroupSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.shared_tab_group_account_data_specifics_pb2 import \
@@ -4940,7 +4942,8 @@ class Chrome(WebBrowser):
         # Sync Data is Chromium's DataTypeStore. Its keys are "<data type>-dt-<storage key>" for an
         # entity's data, "<data type>-md-<storage key>" for that entity's EntityMetadata, and
         # "<data type>-GlobalMetadata" for the type's DataTypeState, plus one schema descriptor.
-        sync_key_re = re.compile(rb'^([a-z0-9_]+)-(dt-|md-|GlobalMetadata$)')
+        # A data type kept in account storage (separate from the local copy) has "A-" in front.
+        sync_key_re = re.compile(rb'^(?:A-)?([a-z0-9_]+)-(dt-|md-|GlobalMetadata$)')
 
         # The message each data type's sync bridge stores for an entity's data. The bridges for
         # most of the older types are SyncableServices, which all store PersistedEntityData.
@@ -4951,6 +4954,7 @@ class Chrome(WebBrowser):
             'user_consent': UserConsentSpecifics,
             'send_tab_to_self': SendTabToSelfLocal,
             'reading_list': ReadingListLocal,
+            'account_setting': AccountSettingSpecifics,
             'collaboration_group': CollaborationGroupSpecifics,
             'shared_tab_group_account_data': SharedTabGroupAccountDataSpecifics,
             'webauthn_credential': WebauthnCredentialSpecifics,

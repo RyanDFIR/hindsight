@@ -87,6 +87,13 @@ class TestSyncDataRecords(unittest.TestCase):
         self.assertEqual(rows['collection-dt-ROOT'].row_type, 'collection')
         self.assertEqual(rows['collection-dt-ROOT'].value, '1: "ROOT"\n3: 1')
 
+    def test_account_storage_keys_decode_like_local_ones(self):
+        # A data type kept in account storage has its keys prefixed with "A-"
+        rows = self._parse([(b'A-reading_list-GlobalMetadata', b'\x2a\x04abcd')])
+        row = rows['A-reading_list-GlobalMetadata']
+        self.assertEqual(row.row_type, 'global metadata')
+        self.assertEqual(row.value, 'cache_guid: "abcd"')
+
 
 if __name__ == '__main__':
     unittest.main()
