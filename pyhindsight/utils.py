@@ -627,6 +627,100 @@ def get_ldb_records(ldb_path, unparsed, prefix=''):
     return cleaned_records
 
 
+def schemaless_proto(data):
+    """Parse bytes as a protobuf message without a schema, or return None if they are not one.
+
+    Every field lands in the message's unknown fields. The bytes only count as a message if
+    they hold at least one field and re-serialize to exactly the same bytes, so nothing is lost
+    when they are written out with proto_to_text."""
+    from google.protobuf import empty_pb2, unknown_fields
+
+    try:
+        message = empty_pb2.Empty.FromString(data)
+    except Exception:
+        return None
+    if not len(unknown_fields.UnknownFieldSet(message)) or message.SerializeToString() != data:
+        return None
+    return message
+
+
+def _is_printable_text(data):
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return False
+    return all(c.isprintable() or c in '\t\n\r' for c in text)
+
+
+def _unknown_fields_to_lines(fields, indent):
+    from google.protobuf.internal import wire_format
+    from google.protobuf import text_encoding
+
+    pad = ' ' * indent
+    lines = []
+    for field in fields:
+        name = field.field_number
+        if field.wire_type == wire_format.WIRETYPE_START_GROUP:
+            lines.append(f'{pad}{name} {{')
+            lines.extend(_unknown_fields_to_lines(field.data, indent + 2))
+            lines.append(f'{pad}}}')
+        elif field.wire_type != wire_format.WIRETYPE_LENGTH_DELIMITED:
+            lines.append(f'{pad}{name}: {field.data}')
+        elif _is_printable_text(field.data):
+            lines.append(f'{pad}{name}: "{text_encoding.CEscape(field.data, as_utf8=True)}"')
+        elif (nested := schemaless_proto(field.data)) is not None:
+            lines.append(f'{pad}{name} {{')
+            lines.extend(_message_to_lines(nested, indent + 2))
+            lines.append(f'{pad}}}')
+        else:
+            lines.append(f'{pad}{name}: "{text_encoding.CEscape(field.data, as_utf8=False)}"')
+    return lines
+
+
+def _message_to_lines(message, indent):
+    import io
+    from google.protobuf import message_factory, text_format, unknown_fields
+
+    pad = ' ' * indent
+    lines = []
+    for field, value in message.ListFields():
+        if field.message_type is not None and field.message_type.GetOptions().map_entry:
+            # A map arrives as a dict; write it the way text format does, one entry per key.
+            entry_class = message_factory.GetMessageClass(field.message_type)
+            values = []
+            for k in sorted(value):
+                entry = entry_class(key=k)
+                if field.message_type.fields_by_name['value'].message_type is not None:
+                    entry.value.CopyFrom(value[k])
+                else:
+                    entry.value = value[k]
+                values.append(entry)
+        else:
+            values = value if field.is_repeated else [value]
+        for v in values:
+            if field.message_type is not None:
+                lines.append(f'{pad}{field.name} {{')
+                lines.extend(_message_to_lines(v, indent + 2))
+                lines.append(f'{pad}}}')
+            else:
+                out = io.StringIO()
+                text_format.PrintField(field, v, out, indent=indent, as_utf8=True)
+                lines.append(out.getvalue().rstrip('\n'))
+    lines.extend(_unknown_fields_to_lines(unknown_fields.UnknownFieldSet(message), indent))
+    return lines
+
+
+def proto_to_text(message):
+    """Write a decoded protobuf message in text format, including the fields its .proto does
+    not define (removed since, added later, or specific to one browser), which appear by number.
+
+    protobuf's own print_unknown_fields option is not used because it reads some short strings
+    (such as "t") as an empty nested message and drops them. Here an unknown value is shown as
+    text if it is printable UTF-8, as a nested message if schemaless_proto accepts it, and as
+    escaped bytes otherwise."""
+    return '\n'.join(_message_to_lines(message, 0))
+
+
 def read_varint(source):
     result = 0
     bytes_used = 0

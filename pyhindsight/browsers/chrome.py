@@ -4922,11 +4922,47 @@ class Chrome(WebBrowser):
         from pyhindsight.lib.proto.components.sync.protocol.session_specifics_pb2 import SessionSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.entity_metadata_pb2 import EntityMetadata
         from pyhindsight.lib.proto.components.sync.protocol.data_type_state_pb2 import DataTypeState
+        from pyhindsight.lib.proto.components.sync.protocol.data_type_store_schema_descriptor_pb2 import \
+            DataTypeStoreSchemaDescriptor
         from pyhindsight.lib.proto.components.sync.protocol.user_event_specifics_pb2 import UserEventSpecifics
-        from pyhindsight.lib.proto.components.sync.protocol.app_specifics_pb2 import AppSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.user_consent_specifics_pb2 import UserConsentSpecifics
         from pyhindsight.lib.proto.components.sync.protocol.persisted_entity_data_pb2 import PersistedEntityData
+        from pyhindsight.lib.proto.components.sync.protocol.collaboration_group_specifics_pb2 import \
+            CollaborationGroupSpecifics
+        from pyhindsight.lib.proto.components.sync.protocol.shared_tab_group_account_data_specifics_pb2 import \
+            SharedTabGroupAccountDataSpecifics
+        from pyhindsight.lib.proto.components.sync.protocol.webauthn_credential_specifics_pb2 import \
+            WebauthnCredentialSpecifics
+        from pyhindsight.lib.proto.components.send_tab_to_self.proto.send_tab_to_self_pb2 import SendTabToSelfLocal
+        from pyhindsight.lib.proto.components.reading_list.core.proto.reading_list_pb2 import ReadingListLocal
         from pyhindsight.lib.proto.components.sync.protocol.sync_enums_pb2 import SyncEnums
+
+        # Sync Data is Chromium's DataTypeStore. Its keys are "<data type>-dt-<storage key>" for an
+        # entity's data, "<data type>-md-<storage key>" for that entity's EntityMetadata, and
+        # "<data type>-GlobalMetadata" for the type's DataTypeState, plus one schema descriptor.
+        sync_key_re = re.compile(rb'^([a-z0-9_]+)-(dt-|md-|GlobalMetadata$)')
+
+        # The message each data type's sync bridge stores for an entity's data. The bridges for
+        # most of the older types are SyncableServices, which all store PersistedEntityData.
+        data_classes = {
+            'device_info': DeviceInfoSpecifics,
+            'sessions': SessionSpecifics,
+            'user_events': UserEventSpecifics,
+            'user_consent': UserConsentSpecifics,
+            'send_tab_to_self': SendTabToSelfLocal,
+            'reading_list': ReadingListLocal,
+            'collaboration_group': CollaborationGroupSpecifics,
+            'shared_tab_group_account_data': SharedTabGroupAccountDataSpecifics,
+            'webauthn_credential': WebauthnCredentialSpecifics,
+        }
+        for data_type in ('preferences', 'priority_preferences', 'os_preferences', 'os_priority_preferences',
+                          'search_engines', 'apps', 'app_settings', 'app_list', 'extensions', 'extension_settings',
+                          'themes', 'dictionary', 'history_delete_directives', 'arc_package',
+                          'managed_user_settings'):
+            data_classes[data_type] = PersistedEntityData
+
+        # Row types from before the type names came from the keys
+        record_type_names = {'search_engines': 'search engine'}
 
         os_type_labels = {
             'OS_TYPE_UNSPECIFIED': 'Unspecified',
@@ -4941,15 +4977,45 @@ class Chrome(WebBrowser):
         }
         for item in items:
             raw_proto = item['value']
+            key = bytes(item['key'])
             parsed_proto = None
+            proto_class = None
             record_type = "sync data"
             value_str = ""
 
-            # Only live records have a value
+            key_match = sync_key_re.match(key)
+            if key == b'_mts_schema_descriptor':
+                record_type = 'schema descriptor'
+                proto_class = DataTypeStoreSchemaDescriptor
+            elif key_match and key_match.group(2) == b'md-':
+                record_type = 'entity metadata'
+                proto_class = EntityMetadata
+            elif key_match and key_match.group(2) == b'GlobalMetadata':
+                record_type = 'global metadata'
+                # The progress marker's "token" field (#2) is opaque bytes by design, but is sometimes
+                # a nested protobuf; I'm unsure of the matching proto definition. Not parsing it for now.
+                proto_class = DataTypeState
+            elif key_match:
+                data_type = key_match.group(1).decode()
+                record_type = record_type_names.get(data_type, data_type.replace('_', ' '))
+                proto_class = data_classes.get(data_type)
+
+            # Only live records have a value; deleted records won't
             if raw_proto:
-                if item['key'].startswith(b'device_info-dt'):
-                    record_type = 'device info'
-                    parsed_proto = DeviceInfoSpecifics.FromString(raw_proto)
+                if proto_class:
+                    try:
+                        parsed_proto = proto_class.FromString(raw_proto)
+                    except Exception as e:
+                        log.debug(f" - Sync Data record {key} did not parse as {proto_class.__name__}: {e}")
+
+                # Without a vendored .proto for this record (Edge has data types Chromium doesn't, for
+                # example), decode it without a schema; its fields are then shown by number.
+                if parsed_proto is None:
+                    parsed_proto = utils.schemaless_proto(raw_proto)
+                    if parsed_proto is None:
+                        log.debug(f" - Sync Data record {key} is not a protobuf (value_len={len(raw_proto)})")
+
+                if isinstance(parsed_proto, DeviceInfoSpecifics):
                     cache_guid = parsed_proto.cache_guid
                     if cache_guid:
                         os_type_value = parsed_proto.os_type
@@ -4968,57 +5034,12 @@ class Chrome(WebBrowser):
                                 'model': model_value,
                             }
 
-                elif b'-GlobalMetadata' in item['key']:
-                    record_type = 'global metadata'
-                    # There's a "token" field (#2) that isn't supposed to be anything parseable, but it sometimes is
-                    # a nested protobuf; I'm unsure of the matching proto definition. Not parsing it for now.
-                    parsed_proto = DataTypeState.FromString(raw_proto)
-
-                elif item['key'].startswith(b'sessions-dt'):
-                    record_type = 'sessions'
-                    parsed_proto = SessionSpecifics.FromString(raw_proto)
-
-                elif item['key'].startswith(b'preferences-dt'):
-                    record_type = 'preferences'
-                    parsed_proto = PersistedEntityData.FromString(raw_proto)
-
-                elif item['key'].startswith(b'user_events-dt'):
-                    record_type = 'user events'
-                    parsed_proto = UserEventSpecifics.FromString(raw_proto)
-
-                elif item['key'].startswith(b'apps-dt'):
-                    record_type = 'apps'
-                    parsed_proto = AppSpecifics.FromString(raw_proto)
-
-                elif item['key'].startswith(b'user_consent-dt'):
-                    record_type = 'user consent'
-                    parsed_proto = UserConsentSpecifics.FromString(raw_proto)
-
-                elif item['key'].startswith(b'search_engines-dt'):
-                    record_type = 'search engine'
-                    parsed_proto = PersistedEntityData.FromString(raw_proto)
-
-                elif item['key'].startswith((b'sessions-md-', b'preferences-md-', b'search_engines-md-',
-                                            b'device_info-md-', b'user_events-md-', b'priority_preferences-md-',
-                                             b'extensions-md-', b'themes-md-', b'apps-md-', b'user_consent-md-')):
-                    record_type = 'entity metadata'
-                    parsed_proto = EntityMetadata.FromString(raw_proto)
-
-                else:
-                    # Idea: add parsing via blackboxprotobuf of protos we don't have the definitions for.
-                    parsed_proto = None
-                    log.debug(f" - Sync Data proto parsed empty for key {item['key']} (value_len={len(raw_proto)})")
-
-            # Deleted records won't have a value
-            else:
-                value_str = ""
-
-            # If we have a value, but it wasn't parsed from a proto we know about, show the raw value
-            if raw_proto and not parsed_proto:
+            # If we have a value, but it couldn't be parsed as a protobuf, show the raw value
+            if raw_proto and parsed_proto is None:
                 value_str = f"Raw value: {item['value'].hex()}"
 
-            if parsed_proto:
-                value_str = str(parsed_proto)
+            if parsed_proto is not None:
+                value_str = utils.proto_to_text(parsed_proto)
 
             key_value = item.get('key')
             if isinstance(key_value, bytes):
