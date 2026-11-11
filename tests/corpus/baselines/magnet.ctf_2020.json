@@ -19,10 +19,10 @@
     "chrome:service_worker:user_data": 17,
     "chrome:session_storage:entry": 880,
     "chrome:site_setting:entry": 493,
-    "chrome:sync_data:entry": 2486
+    "chrome:sync_data:entry": 2556
   },
   "generated_by": {
-    "generated_utc": "2026-09-04T17:01:57Z",
+    "generated_utc": "2026-11-11T18:20:30Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -172,6 +172,30 @@
           "unparsed_records": 0,
           "unparsed_sources": 0
         },
+        "Sync metadata (Bookmarks)": {
+          "count": 4,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 11,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 54,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
         "shared_proto_db downloads": {
           "count": 0,
           "status": null,
@@ -183,5 +207,5 @@
     }
   },
   "root": "magnet.ctf_2020",
-  "total_records": 17316
+  "total_records": 17386
 }

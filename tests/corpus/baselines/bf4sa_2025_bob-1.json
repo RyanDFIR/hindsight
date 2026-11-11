@@ -26,10 +26,10 @@
     "chrome:session:window": 4,
     "chrome:session_storage:entry": 827,
     "chrome:site_setting:entry": 653,
-    "chrome:sync_data:entry": 3673
+    "chrome:sync_data:entry": 3715
   },
   "generated_by": {
-    "generated_utc": "2026-10-27T13:56:16Z",
+    "generated_utc": "2026-11-11T18:19:45Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -215,6 +215,42 @@
           "unparsed_records": 0,
           "unparsed_sources": 0
         },
+        "Sync metadata (Account Web Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Bookmarks)": {
+          "count": 6,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data For Account)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 4,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 14,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
         "shared_proto_db downloads": {
           "count": 22,
           "status": null,
@@ -388,6 +424,42 @@
           "unparsed_records": 0,
           "unparsed_sources": 0
         },
+        "Sync metadata (Account Web Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Bookmarks)": {
+          "count": 4,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data For Account)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 12,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
         "shared_proto_db downloads": {
           "count": 0,
           "status": null,
@@ -399,5 +471,5 @@
     }
   },
   "root": "bf4sa_2025_bob-1",
-  "total_records": 65548
+  "total_records": 65590
 }

@@ -2895,10 +2895,12 @@ class AnalysisSession(object):
                     sync_ws.write(row_number, 3, item.interpretation, black_value_format)
                     sync_ws.write(row_number, 4, item.profile, black_value_format)
                     sync_ws.write(row_number, 5, source_item(item.source_path, item.profile), black_value_format)
+                    # Rows read from a SQLite or JSON file (sync metadata outside Sync Data) have no
+                    # LevelDB fields; write() leaves those cells blank where write_number() would raise
                     sync_ws.write(row_number, 6, item.offset, black_value_format)
-                    sync_ws.write_number(row_number, 7, item.seq, black_value_format)
-                    sync_ws.write_string(row_number, 8, item.state, black_value_format)
-                    sync_ws.write_string(row_number, 9, item.file_type, black_value_format)
+                    sync_ws.write(row_number, 7, item.seq, black_value_format)
+                    sync_ws.write(row_number, 8, item.state, black_value_format)
+                    sync_ws.write(row_number, 9, item.file_type, black_value_format)
 
             except Exception as e:
                 log.error(f'Failed to write row to XLSX: {e}')

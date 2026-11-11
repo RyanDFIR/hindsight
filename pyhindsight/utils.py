@@ -644,7 +644,7 @@ def schemaless_proto(data):
     return message
 
 
-def _is_printable_text(data):
+def is_printable_text(data):
     try:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
@@ -666,7 +666,7 @@ def _unknown_fields_to_lines(fields, indent):
             lines.append(f'{pad}}}')
         elif field.wire_type != wire_format.WIRETYPE_LENGTH_DELIMITED:
             lines.append(f'{pad}{name}: {field.data}')
-        elif _is_printable_text(field.data):
+        elif is_printable_text(field.data):
             lines.append(f'{pad}{name}: "{text_encoding.CEscape(field.data, as_utf8=True)}"')
         elif (nested := schemaless_proto(field.data)) is not None:
             lines.append(f'{pad}{name} {{')

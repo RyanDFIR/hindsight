@@ -19,7 +19,7 @@
     "chrome:sync_data:entry": 2
   },
   "generated_by": {
-    "generated_utc": "2026-10-27T13:56:48Z",
+    "generated_utc": "2026-11-11T18:20:27Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -140,6 +140,24 @@
           "unparsed_sources": 0
         },
         "Sync Extension Settings": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
           "count": 0,
           "status": null,
           "unparsed_records": 0,
@@ -271,6 +289,24 @@
           "unparsed_sources": 0
         },
         "Sync Extension Settings": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
           "count": 0,
           "status": null,
           "unparsed_records": 0,

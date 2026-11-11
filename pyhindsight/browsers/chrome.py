@@ -5065,6 +5065,195 @@ class Chrome(WebBrowser):
         self.parsed_sync_data.extend(result_list)
         return unparsed.result(len(result_list))
 
+    # Specifics field names whose data type goes by a different name in Chromium's
+    # DataTypeToStableLowerCaseString, which is the name Sync Data keys use.
+    sync_type_names = {
+        'app': 'apps', 'app_setting': 'app_settings', 'autofill_profile': 'autofill_profiles',
+        'bookmark': 'bookmarks', 'cookie': 'cookies', 'extension': 'extensions',
+        'extension_setting': 'extension_settings', 'history_delete_directive': 'history_delete_directives',
+        'managed_user_setting': 'managed_user_settings', 'os_preference': 'os_preferences',
+        'os_priority_preference': 'os_priority_preferences', 'password': 'passwords', 'preference': 'preferences',
+        'printer': 'printers', 'printers_authorization_server': 'printers_authorization_servers',
+        'priority_preference': 'priority_preferences', 'search_engine': 'search_engines',
+        'security_event': 'security_events', 'session': 'sessions', 'theme': 'themes', 'typed_url': 'typed_urls',
+        'user_event': 'user_events', 'wallet_metadata': 'autofill_wallet_metadata', 'web_app': 'web_apps',
+        'wifi_configuration': 'wifi_configurations',
+    }
+
+    def get_sync_metadata(self, path, file_name):
+        """Read the sync metadata a data type keeps in its own file instead of Sync Data.
+
+        Autofill and payments (Web Data), passwords (Login Data), history (History) and
+        bookmarks (Bookmarks) don't use the Sync Data LevelDB. Each keeps the same two things
+        in its own file: an EntityMetadata for every synced entity and a DataTypeState for the
+        data type. Their rows get keys in the Sync Data format ("<data type>-md-<storage key>"
+        and "<data type>-GlobalMetadata", with "A-" in front for account storage), so both
+        sources filter the same way; the source path says which file a row came from.
+        """
+        from pyhindsight.lib.proto.components.sync.protocol.entity_metadata_pb2 import EntityMetadata
+        from pyhindsight.lib.proto.components.sync.protocol.data_type_state_pb2 import DataTypeState
+        from pyhindsight.lib.proto.components.sync.protocol.bookmark_model_metadata_pb2 import \
+            BookmarkModelMetadata
+        from pyhindsight.lib.proto.components.sync.protocol.entity_specifics_pb2 import EntitySpecifics
+        from pyhindsight.lib.proto.components.autofill.core.browser.proto.autofill_sync_pb2 import \
+            AutofillSyncStorageKey
+
+        results = []
+        unparsed = ParseFailures(f'Sync metadata ({file_name})')
+        source_path = os.path.join(path, file_name)
+        log.info(f'Sync metadata from {file_name}:')
+
+        prefix = 'A-' if file_name in ('Account Web Data', 'Login Data For Account', 'AccountBookmarks') else ''
+        specifics_names = {field.number: field.name for field in EntitySpecifics.DESCRIPTOR.fields}
+
+        def as_bytes(value):
+            # utils.text_factory hands back a TEXT column as str when it happens to be valid UTF-8
+            return value.encode('utf-8') if isinstance(value, str) else value
+
+        def decode(proto_class, value, key):
+            """Return (message, text) for one stored blob; message is None if it isn't a proto_class."""
+            value = as_bytes(value)
+            if not value:
+                return None, ''
+            try:
+                message = proto_class.FromString(value)
+                return message, utils.proto_to_text(message)
+            except Exception as e:
+                log.debug(f' - {key} in {file_name} did not parse as {proto_class.__name__}: {e}')
+            message = utils.schemaless_proto(value)
+            if message is not None:
+                return None, utils.proto_to_text(message)
+            unparsed.record(key, f'not a {proto_class.__name__}')
+            return None, f'Raw value: {value.hex()}'
+
+        def type_name(state, default):
+            """Name a data type from the specifics field number its DataTypeState records."""
+            if state is not None and state.progress_marker.data_type_id:
+                name = specifics_names.get(state.progress_marker.data_type_id)
+                if name:
+                    return Chrome.sync_type_names.get(name, name)
+            return default
+
+        def storage_key_text(storage_key, data_type):
+            if isinstance(storage_key, int):
+                return str(storage_key)
+            storage_key = as_bytes(storage_key)
+            # An autocomplete entry's storage key is the entry itself: its field name and value
+            if data_type == 'autofill':
+                try:
+                    autofill_key = AutofillSyncStorageKey.FromString(storage_key)
+                    if autofill_key.HasField('name') and autofill_key.SerializeToString() == storage_key:
+                        return ' '.join(utils.proto_to_text(autofill_key).splitlines())
+                except Exception:
+                    pass
+            if utils.is_printable_text(storage_key):
+                return storage_key.decode('utf-8')
+            message = utils.schemaless_proto(storage_key)
+            if message is not None:
+                return ' '.join(line.strip() for line in utils.proto_to_text(message).splitlines())
+            return storage_key.hex()
+
+        def add(key, value, row_type):
+            results.append(Chrome.SyncDataItem(
+                profile=self.profile_path, key=prefix + key, value=value, row_type=row_type,
+                interpretation='', source_path=source_path))
+
+        if file_name in ('Bookmarks', 'AccountBookmarks'):
+            try:
+                with open(source_path, encoding='utf-8', errors='replace') as f:
+                    encoded = json.load(f).get('sync_metadata')
+            except Exception as e:
+                unparsed.source(source_path, f'could not be read as JSON ({e})')
+                return unparsed.result(0)
+            if not encoded:
+                return unparsed.result(0)
+            try:
+                metadata = BookmarkModelMetadata.FromString(base64.b64decode(encoded))
+            except Exception as e:
+                unparsed.source(source_path, f'sync_metadata is not a BookmarkModelMetadata ({e})')
+                return unparsed.result(0)
+
+            # Each entity's storage key is the id of its bookmark node in the same file
+            add('bookmarks-GlobalMetadata', utils.proto_to_text(metadata.data_type_state), 'global metadata')
+            for bookmark in metadata.bookmarks_metadata:
+                add(f'bookmarks-md-{bookmark.id}', utils.proto_to_text(bookmark.metadata), 'entity metadata')
+            self.parsed_sync_data.extend(results)
+            return unparsed.result(len(results))
+
+        conn = utils.open_sqlite_db(self, path, file_name)
+        if not conn:
+            return None
+
+        try:
+            tables = {row['name'] for row in conn.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
+
+            def columns(table):
+                return {row['name'] for row in conn.execute(f'PRAGMA table_info({table})')}
+
+            # Web Data's tables hold several data types, told apart by a model_type number (absent
+            # before Chrome 69, when autocomplete was the only one). That number is internal, so each
+            # type is named from its DataTypeState instead.
+            for state_table, entity_table, default_type in (
+                    ('autofill_model_type_state', 'autofill_sync_metadata', 'autofill'),
+                    ('plus_address_sync_model_type_state', 'plus_address_sync_entity_metadata', None)):
+                type_names = {}
+                if state_table in tables:
+                    type_column = 'model_type' if 'model_type' in columns(state_table) else None
+                    for row in conn.execute(f'SELECT * FROM {state_table}'):
+                        model_type = row.get(type_column) if type_column else None
+                        state, text = decode(DataTypeState, row.get('value'), f'{state_table} {model_type}')
+                        fallback = default_type if type_column is None else f'model_type_{model_type}'
+                        type_names[model_type] = type_name(state, fallback)
+                        add(f'{type_names[model_type]}-GlobalMetadata', text, 'global metadata')
+                if entity_table in tables:
+                    type_column = 'model_type' if 'model_type' in columns(entity_table) else None
+                    for row in conn.execute(f'SELECT * FROM {entity_table}'):
+                        model_type = row.get(type_column) if type_column else None
+                        data_type = type_names.get(model_type) or (
+                            default_type if type_column is None else f'model_type_{model_type}')
+                        key = f"{data_type}-md-{storage_key_text(row.get('storage_key'), data_type)}"
+                        add(key, decode(EntityMetadata, row.get('value'), key)[1], 'entity metadata')
+
+            # Login Data: passwords. Chrome encrypts each entity's metadata as it does the passwords.
+            if 'sync_model_metadata' in tables:
+                for row in conn.execute('SELECT model_metadata FROM sync_model_metadata'):
+                    state, text = decode(DataTypeState, row.get('model_metadata'), 'sync_model_metadata')
+                    add(f"{type_name(state, 'passwords')}-GlobalMetadata", text, 'global metadata')
+            if 'sync_entities_metadata' in tables:
+                for row in conn.execute('SELECT storage_key, metadata FROM sync_entities_metadata'):
+                    key = f"passwords-md-{storage_key_text(row.get('storage_key'), 'passwords')}"
+                    metadata = as_bytes(row.get('metadata'))
+                    # v20 is app-bound encryption (Chrome 127+), which decrypt_cookie can't undo
+                    if metadata and metadata[:3] in (b'v10', b'v11', b'v20'):
+                        decrypted = self.decrypt_cookie(metadata)
+                        if not isinstance(decrypted, bytes):
+                            add(key, '<encrypted>', 'entity metadata')
+                            continue
+                        metadata = decrypted
+                    add(key, decode(EntityMetadata, metadata, key)[1], 'entity metadata')
+
+            # History: typed URLs in older versions, full history in newer ones
+            for entity_table, data_type in (('typed_url_sync_metadata', 'typed_urls'),
+                                            ('history_sync_metadata', 'history')):
+                if entity_table in tables:
+                    for row in conn.execute(f'SELECT storage_key, value FROM {entity_table}'):
+                        key = f"{data_type}-md-{storage_key_text(row.get('storage_key'), data_type)}"
+                        add(key, decode(EntityMetadata, row.get('value'), key)[1], 'entity metadata')
+            if 'meta' in tables:
+                for meta_key, data_type in (('typed_url_model_type_state', 'typed_urls'),
+                                            ('history_model_type_state', 'history')):
+                    for row in conn.execute('SELECT value FROM meta WHERE key = ?', (meta_key,)):
+                        state, text = decode(DataTypeState, row.get('value'), f'meta {meta_key}')
+                        add(f'{type_name(state, data_type)}-GlobalMetadata', text, 'global metadata')
+
+        except sqlite3.Error as e:
+            unparsed.source(source_path, f'error reading sync metadata ({e})')
+        finally:
+            conn.close()
+
+        self.parsed_sync_data.extend(results)
+        return unparsed.result(len(results))
+
     def build_hsts_domain_hashes(self):
         domains = self.get_clean_hostnames()
 
@@ -5512,6 +5701,15 @@ class Chrome(WebBrowser):
                     self.profile_path, 'Sync Data',
                     display_value='Sync Data records',
                     artifact='sync-data')
+
+            for file_name in ['Web Data', 'Account Web Data', 'Login Data', 'Login Data For Account', 'History',
+                              'Bookmarks', 'AccountBookmarks']:
+                if file_name in input_listing:
+                    driver.run(
+                        f'Sync metadata ({file_name})', f'Sync metadata ({file_name})', self.get_sync_metadata,
+                        self.profile_path, file_name,
+                        display_value=f'Sync metadata records ({file_name})',
+                        artifact='sync-data')
 
             if network_listing and 'TransportSecurity' in network_listing:
                 driver.run(

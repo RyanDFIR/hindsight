@@ -25,10 +25,10 @@
     "chrome:session:window_closed": 1,
     "chrome:session_storage:entry": 756,
     "chrome:site_setting:entry": 665,
-    "chrome:sync_data:entry": 1732
+    "chrome:sync_data:entry": 1760
   },
   "generated_by": {
-    "generated_utc": "2026-10-27T13:57:11Z",
+    "generated_utc": "2026-11-11T18:20:57Z",
     "hindsight_version": "2026.06"
   },
   "profiles": {
@@ -178,6 +178,30 @@
           "unparsed_records": 0,
           "unparsed_sources": 0
         },
+        "Sync metadata (History)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data For Account)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
         "shared_proto_db downloads": {
           "count": 12,
           "status": null,
@@ -269,6 +293,30 @@
         },
         "Sync Data": {
           "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data For Account)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 0,
           "status": null,
           "unparsed_records": 0,
           "unparsed_sources": 0
@@ -434,6 +482,36 @@
           "unparsed_records": 0,
           "unparsed_sources": 0
         },
+        "Sync metadata (Bookmarks)": {
+          "count": 4,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 6,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data For Account)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 3,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 15,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
         "shared_proto_db downloads": {
           "count": 20,
           "status": null,
@@ -531,6 +609,30 @@
         },
         "Sync Data": {
           "count": 1,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (History)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data For Account)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 0,
           "status": null,
           "unparsed_records": 0,
           "unparsed_sources": 0
@@ -678,6 +780,24 @@
           "unparsed_records": 0,
           "unparsed_sources": 0
         },
+        "Sync metadata (History)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Login Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
+        "Sync metadata (Web Data)": {
+          "count": 0,
+          "status": null,
+          "unparsed_records": 0,
+          "unparsed_sources": 0
+        },
         "shared_proto_db downloads": {
           "count": 1,
           "status": null,
@@ -689,5 +809,5 @@
     }
   },
   "root": "magnet.ctf_2023",
-  "total_records": 38640
+  "total_records": 38668
 }
