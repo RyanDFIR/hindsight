@@ -372,69 +372,37 @@ def main():
                 update_plugin_table(live)
                 log.info(f' - Failed; {e}')
 
-    # Then look for any custom user-provided plugins in a 'plugins' directory
+    # Then run any custom user-provided plugins. pyhindsight.plugins.custom_plugin_dirs()
+    # says where they are looked for.
     log.info(" Custom Plugins:")
 
-    # Useful when Hindsight is run from a different directory than where the file is located
-    real_path = os.path.dirname(os.path.realpath(sys.argv[0]))
-    if real_path not in sys.path:
-        sys.path.insert(0, real_path)
+    for plugin, plugin_dir in pyhindsight.plugins.find_custom_plugins():
+        # The full path, so the log shows which file ran.
+        log.info(f" - Loading custom plugin '{plugin}' from {os.path.join(plugin_dir, plugin + '.py')}")
+        try:
+            module = pyhindsight.plugins.load_custom_plugin(plugin, plugin_dir)
+        except ImportError as e:
+            log.error(f' - Error: {e}')
+            plugin_rows.append((format_plugin_name(plugin, "unknown"), rich.text.Text("- import failed -", style="red")))
+            update_plugin_table(None)
+            continue
+        except Exception as e:
+            log.error(f' - Exception in {plugin} plugin: {e}')
+            continue
 
-    # Loop through all paths, to pick up all potential locations for custom plugins
-    for potential_path in sys.path:
-        # If a subdirectory exists called 'plugins' or 'pyhindsight/plugins' at the current path, continue on
-        for potential_plugin_path in [os.path.join(potential_path, 'plugins'),
-                                      os.path.join(potential_path, 'pyhindsight', 'plugins')]:
-            if os.path.isdir(potential_plugin_path):
-                log.info(f" Found custom plugin directory {potential_plugin_path}:")
-                try:
-                    # Insert the current plugin location to the system path, so we can import plugin modules by name
-                    sys.path.insert(0, potential_plugin_path)
-
-                    # Get list of available plugins and run them
-                    plugin_listing = os.listdir(potential_plugin_path)
-
-                    log.debug(" - Contents of plugin folder: " + str(plugin_listing))
-                    for plugin in plugin_listing:
-                        if plugin[-3:] == ".py" and plugin[0] != '_':
-                            plugin = plugin.replace(".py", "")
-
-                            # Check to see if we've already run this plugin (likely from a different path)
-                            if plugin in completed_plugins:
-                                log.debug(f" - Skipping '{plugin}'; a plugin with that name has run already")
-                                continue
-
-                            log.debug(f" - Loading '{plugin}'")
-                            try:
-                                module = __import__(plugin)
-                            except ImportError as e:
-                                log.error(f' - Error: {e}')
-                                plugin_rows.append((format_plugin_name(plugin, "unknown"), rich.text.Text("- import failed -", style="red")))
-                                update_plugin_table(None)
-                                continue
-                            except Exception as e:
-                                log.error(f' - Exception in {plugin} plugin: {e}')
-                                continue
-
-                            try:
-                                log.info(f" - Running '{module.friendlyName}' plugin")
-                                plugin_rows.append((format_plugin_name(module.friendlyName, module.version), running_status()))
-                                update_plugin_table(None)
-                                parsed_items = module.plugin(analysis_session)
-                                plugin_rows[-1] = (format_plugin_name(module.friendlyName, module.version), format_plugin_result(parsed_items))
-                                update_plugin_table(None)
-                                log.info(f' - Completed; {parsed_items}')
-                                completed_plugins.append(plugin)
-                            except Exception as e:
-                                plugin_rows[-1] = (format_plugin_name(module.friendlyName, module.version), rich.text.Text("- failed -", style="red"))
-                                update_plugin_table(None)
-                                log.info(f' - Failed; {e}')
-                except Exception as e:
-                    log.debug(f' - Error loading plugins ({e})')
-                    console.print('  - Error loading plugins')
-                finally:
-                    # Remove the current plugin location from the system path, so we don't loop over it again
-                    sys.path.remove(potential_plugin_path)
+        try:
+            log.info(f" - Running '{module.friendlyName}' plugin")
+            plugin_rows.append((format_plugin_name(module.friendlyName, module.version), running_status()))
+            update_plugin_table(None)
+            parsed_items = module.plugin(analysis_session)
+            plugin_rows[-1] = (format_plugin_name(module.friendlyName, module.version), format_plugin_result(parsed_items))
+            update_plugin_table(None)
+            log.info(f' - Completed; {parsed_items}')
+            completed_plugins.append(plugin)
+        except Exception as e:
+            plugin_rows[-1] = (format_plugin_name(module.friendlyName, module.version), rich.text.Text("- failed -", style="red"))
+            update_plugin_table(None)
+            log.info(f' - Failed; {e}')
 
     # Check if output directory exists; attempt to create if it doesn't
     if os.path.dirname(analysis_session.output_name) != "" \
