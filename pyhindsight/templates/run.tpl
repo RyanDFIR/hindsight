@@ -26,6 +26,7 @@
             }
         </script>
         <form action="/run" name="run" method="post" onsubmit="return validateForm();">
+        <input type="hidden" name="csrf_token" value="{{csrf_token}}">
         <table class="layout-table">
             <tr>
                 <td colspan=2 class="inputs-td">

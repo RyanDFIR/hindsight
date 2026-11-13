@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import hmac
 import os
+import secrets
 import sys
 import logging
 import warnings
@@ -17,6 +19,50 @@ import rich.console
 # This will be the main pyhindsight.AnalysisSession object that all the work will be done on
 analysis_session = None
 STATIC_PATH = 'static'
+
+HOST = 'localhost'
+PORT = 8080
+
+# The names a browser on this machine can reach the server by. Binding to loopback
+# keeps other machines out, but not the pages open in the operator's own browser:
+# any of them can send requests to localhost. See request_rejection().
+ALLOWED_HOSTS = frozenset(f'{name}:{PORT}' for name in ('localhost', '127.0.0.1', '[::1]'))
+ALLOWED_ORIGINS = frozenset(f'http://{host}' for host in ALLOWED_HOSTS)
+
+# Sent in the run form and required back on /run. New for every launch, and a page on
+# another origin has no way to read it.
+CSRF_TOKEN = secrets.token_urlsafe(32)
+
+
+def request_rejection(method, host, origin=None, token=None):
+    """Why a request should be refused, or None if it may go ahead.
+
+    Host is checked on every request. A DNS rebinding page points its own hostname at
+    127.0.0.1, which makes it same-origin with this server and lets it read the
+    results, but its requests still carry that hostname in Host.
+
+    A POST also needs the form token, and an Origin of ours if the browser sent one.
+    Without those, any site could submit the run form blind, choosing the input,
+    log and temp paths.
+    """
+    if (host or '').lower() not in ALLOWED_HOSTS:
+        return 'unexpected Host header'
+    if method not in ('GET', 'HEAD'):
+        if origin is not None and origin.lower() not in ALLOWED_ORIGINS:
+            return 'request came from another origin'
+        if not hmac.compare_digest((token or '').encode(), CSRF_TOKEN.encode()):
+            return 'missing or wrong form token'
+    return None
+
+
+@bottle.hook('before_request')
+def check_request():
+    request = bottle.request
+    token = request.forms.get('csrf_token') if request.method == 'POST' else None
+    reason = request_rejection(
+        request.method, request.get_header('Host'), request.get_header('Origin'), token)
+    if reason:
+        bottle.abort(403, f'Request refused: {reason}.')
 
 
 def get_plugins_info():
@@ -125,7 +171,7 @@ def main_screen():
     bottle_args = analysis_session.__dict__
     analysis_session.plugin_descriptions = get_plugins_info()
     bottle_args['plugins_info'] = analysis_session.plugin_descriptions
-    return bottle.template(os.path.join('templates', 'run.tpl'), bottle_args)
+    return bottle.template(os.path.join('templates', 'run.tpl'), bottle_args, csrf_token=CSRF_TOKEN)
 
 
 @bottle.route('/run', method='POST')
@@ -327,7 +373,10 @@ def main():
     # otherwise expose it): combined with running at a higher privilege than the
     # requester, it turns those operator-supplied paths into a genuine
     # arbitrary-file-read (CWE-22). See dismissed code-scanning alert py/path-injection.
-    bottle.run(host='localhost', port=8080, debug=True)
+    #
+    # Loopback alone does not cover the operator's own browser, where any open page
+    # can reach this port. check_request() handles that.
+    bottle.run(host=HOST, port=PORT, debug=True)
 
 
 if __name__ == "__main__":
