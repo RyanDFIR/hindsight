@@ -1719,7 +1719,12 @@ class AnalysisSession(object):
                             sys.path.remove(potential_plugin_path)
 
     def generate_excel(self, output_object):
-        workbook = xlsxwriter.Workbook(output_object, {'in_memory': True, 'strings_to_urls': False})
+        # strings_to_formulas is off because write() otherwise turns any string starting
+        # with "=" into a formula, and these strings come from the evidence: a site can
+        # put one in a header, cookie or storage value. Nothing here writes a formula.
+        workbook = xlsxwriter.Workbook(
+            output_object,
+            {'in_memory': True, 'strings_to_urls': False, 'strings_to_formulas': False})
         # Applies to every add_worksheet() call below (xlsxwriter falls back to this
         # attribute when no explicit worksheet_class is passed), so a None in any column
         # blanks that cell instead of silently dropping the rest of the row.
