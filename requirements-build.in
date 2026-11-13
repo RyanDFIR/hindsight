@@ -1,0 +1,19 @@
+# What the release binaries are built from: Hindsight's dependencies plus PyInstaller.
+#
+# requirements-build.txt is generated from this file and is what the build-binaries
+# workflow installs, with --require-hashes. It pins every package, including the ones
+# these pull in, to one version and lists the hashes of its files. requirements.txt
+# keeps its ranges, and the tests go on installing from it, so a new release of a
+# dependency is tested before it is built into a binary.
+#
+# To refresh it, after checking what changed in the new versions:
+#
+#   pip install uv
+#   uv pip compile requirements-build.in --universal --generate-hashes \
+#       --python-version 3.13 --output-file requirements-build.txt
+#
+# --universal writes one file for Windows, Linux and macOS, with a marker on each
+# package only some of them need (pywin32, for one). Add --upgrade to move everything
+# to its newest version, or --upgrade-package NAME for one package.
+-r requirements.txt
+pyinstaller
