@@ -100,60 +100,33 @@ def get_plugins_info():
             plugin_descriptions.append(description)
             completed_plugins.append(plugin)
 
-    # Useful when Hindsight is run from a different directory than where the file is located
-    real_path = os.path.dirname(os.path.realpath(sys.argv[0]))
-    if real_path not in sys.path:
-        sys.path.insert(0, real_path)
+    # Then the custom plugins. pyhindsight.plugins.custom_plugin_dirs() says where they
+    # are looked for.
+    for plugin, plugin_dir in pyhindsight.plugins.find_custom_plugins():
+        # file_name is what the form sends back as the selection, and run_plugins()
+        # matches it against the plugin's name, so it has no ".py" on it.
+        description = {'file_name': plugin, 'friendly_name': None, 'version': None, 'error': None,
+                       'error_msg': None, 'parent_path': plugin_dir}
 
-    # Loop through all paths, to pick up all potential locations for plugins
-    for potential_path in sys.path:
-        # If a subdirectory exists called 'plugins' at the current path, continue on
-        potential_plugin_path = os.path.join(potential_path, 'plugins')
-        if os.path.isdir(potential_plugin_path):
+        try:
+            module = pyhindsight.plugins.load_custom_plugin(plugin, plugin_dir)
+            description['friendly_name'] = module.friendlyName
+            description['version'] = module.version
             try:
-                # Insert the current plugin location to the system path, so we can import plugin modules by name
-                sys.path.insert(0, potential_plugin_path)
+                module.plugin()
+            except ImportError as e:
+                description['error'] = 'import'
+                description['error_msg'] = e
+                continue
 
-                # Get list of available plugins and run them
-                plugin_listing = os.listdir(potential_plugin_path)
+        except Exception as e:
+            description['error'] = 'other'
+            description['error_msg'] = e
+            continue
 
-                for plugin in plugin_listing:
-                    if plugin[-3:] == ".py" and plugin[0] != '_':
-
-                        description = {'file_name': plugin, 'friendly_name': None, 'version': None, 'error': None,
-                                       'error_msg': None, 'parent_path': potential_plugin_path}
-                        plugin = plugin.replace(".py", "")
-
-                        # Check to see if we've already run this plugin (likely from a different path)
-                        if plugin in completed_plugins:
-                            continue
-
-                        try:
-                            module = __import__(plugin)
-                            description['friendly_name'] = module.friendlyName
-                            description['version'] = module.version
-                            try:
-                                module.plugin()
-                            except ImportError as e:
-                                description['error'] = 'import'
-                                description['error_msg'] = e
-                                continue
-
-                        except Exception as e:
-                            description['error'] = 'other'
-                            description['error_msg'] = e
-                            continue
-
-                        finally:
-                            plugin_descriptions.append(description)
-                            completed_plugins.append(plugin)
-
-            except Exception as e:
-                # log.debug(' - Error loading plugins ({})'.format(e))
-                print('  - Error loading plugins')
-            finally:
-                # Remove the current plugin location from the system path, so we don't loop over it again
-                sys.path.remove(potential_plugin_path)
+        finally:
+            plugin_descriptions.append(description)
+            completed_plugins.append(plugin)
     return plugin_descriptions
 
 
