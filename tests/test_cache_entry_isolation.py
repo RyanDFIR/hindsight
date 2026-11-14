@@ -1,3 +1,7 @@
+import datetime
+import functools
+import gzip
+import hashlib
 import inspect
 import os
 import tempfile
@@ -5,6 +9,7 @@ import types
 import unittest
 from unittest import mock
 
+from pyhindsight import content_encoding
 from pyhindsight.browsers import chrome
 from pyhindsight.browsers.chrome import Chrome, iterate_cache_entries
 
@@ -13,9 +18,9 @@ def _key(url):
     return types.SimpleNamespace(url=url)
 
 
-def _entry(url, metadata=None):
+def _entry(url, metadata=None, data=b'body'):
     return types.SimpleNamespace(
-        key=_key(url), metadata=metadata, data=b'body', was_decompressed=False,
+        key=_key(url), metadata=metadata, data=data, was_decompressed=False,
         metadata_location=None, data_location=None)
 
 
@@ -34,10 +39,11 @@ class FakeCache:
 class FakeProfile:
     """Stands in for ccl's ChromiumProfileFolder: per-key reads, some of which fail."""
 
-    def __init__(self, urls, unreadable=(), fail_after=None, metadata=None):
+    def __init__(self, urls, unreadable=(), fail_after=None, metadata=None, bodies=None):
         self.urls = urls
         self.unreadable = dict(unreadable)
         self.metadata = metadata or {}
+        self.bodies = bodies or {}
         self._cache = None
         self._fail_after = fail_after
 
@@ -47,7 +53,7 @@ class FakeProfile:
     def _yield_cache_record(self, key, decompress, omit_data):
         if key.url in self.unreadable:
             raise self.unreadable[key.url]
-        yield _entry(key.url, self.metadata.get(key.url))
+        yield _entry(key.url, self.metadata.get(key.url), self.bodies.get(key.url, b'body'))
 
 
 class _OutOfRangeMetadata:
@@ -77,10 +83,6 @@ class TestIterateCacheEntries(unittest.TestCase):
         self.assertEqual(['self'], list(inspect.signature(folder._lazy_load_cache).parameters))
         self.assertEqual(['self', 'key', 'decompress', 'omit_data'],
                          list(inspect.signature(folder._yield_cache_record).parameters))
-        # get_cache calls this on the class, so it has to stay a staticmethod.
-        self.assertIsInstance(inspect.getattr_static(folder, '_decompress_cache_data'), staticmethod)
-        self.assertEqual(['data', 'content_encoding'],
-                         list(inspect.signature(folder._decompress_cache_data).parameters))
 
 
 class TestGetCacheIsolatesEntries(unittest.TestCase):
@@ -137,6 +139,57 @@ class TestGetCacheIsolatesEntries(unittest.TestCase):
 
         self.assertEqual(['https://a/', 'https://b/'], urls)
         self.assertEqual(1, result.unparsed_sources)
+
+
+class _GzipMetadata:
+    """Metadata for a response that was sent gzip-encoded."""
+    request_time = datetime.datetime(2024, 5, 1, 12, 0, 0)
+    http_header_attributes = [('content-encoding', 'gzip'), ('content-type', 'text/html')]
+
+    def get_attribute(self, name):
+        return [value for attribute, value in self.http_header_attributes if attribute == name]
+
+
+class TestGetCacheLimitsDecodedSize(unittest.TestCase):
+    """A body that expands past the limit is kept as stored, not decoded into memory."""
+
+    LIMIT = 64 * 1024
+
+    def get_cache(self, bodies):
+        profile = FakeProfile(list(bodies), metadata={url: _GzipMetadata() for url in bodies}, bodies=bodies)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = os.path.join(tmp, 'Cache_Data')
+            os.makedirs(cache_dir)
+            open(os.path.join(cache_dir, 'index'), 'wb').close()
+            browser = Chrome(tmp)
+            limited = functools.partial(content_encoding.decode, max_size=self.LIMIT)
+            with mock.patch.object(chrome.ccl_chromium_reader, 'ChromiumProfileFolder', return_value=profile), \
+                    mock.patch.object(chrome, 'content_encoding_decode', limited), \
+                    mock.patch('pyhindsight.browsers.chrome.log') as log:
+                browser.get_cache(tmp, 'Cache_Data')
+            self.warnings = [call.args[0] for call in log.warning.call_args_list]
+            return {item.url: item for item in browser.parsed_artifacts}
+
+    def test_a_body_past_the_limit_is_reported_and_left_as_stored(self):
+        page = b'<html>ordinary page</html>'
+        bomb = gzip.compress(b'\0' * (self.LIMIT * 16))
+        self.assertLess(len(bomb), self.LIMIT // 8)
+
+        items = self.get_cache({'https://ok/': gzip.compress(page), 'https://bomb/': bomb})
+
+        ok = items['https://ok/']
+        self.assertEqual(page, ok.data)
+        self.assertEqual(hashlib.sha256(page).hexdigest(), ok.body_sha256)
+        self.assertIsNotNone(ok.encoded_md5)
+
+        # Still a row, with the bytes that are on disk and no hash claiming to be the
+        # resource's.
+        left = items['https://bomb/']
+        self.assertEqual(bomb, left.data)
+        self.assertIsNone(left.body_sha256)
+        self.assertIsNone(left.encoded_md5)
+        self.assertTrue(any('https://bomb/ was not decoded' in line for line in self.warnings), self.warnings)
+        self.assertTrue(any('1 of those were left encoded' in line for line in self.warnings), self.warnings)
 
 
 if __name__ == '__main__':

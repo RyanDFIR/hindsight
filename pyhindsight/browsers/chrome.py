@@ -21,6 +21,8 @@ from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
     ParseFailures, WebBrowser, timeline_sort_key)
 from pyhindsight import utils
+from pyhindsight.content_encoding import (
+    DecodedSizeExceeded, NotDecodable, decode as content_encoding_decode)
 
 # Try to import optional modules - do nothing on failure, as status is tracked elsewhere
 try:
@@ -3987,6 +3989,7 @@ class Chrome(WebBrowser):
         cache_items = iterate_cache_entries(profile, decompress=False)
         source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
+        oversized_bodies = 0
         untimed_entries = 0
         phantom_locations = 0
 
@@ -4053,9 +4056,20 @@ class Chrome(WebBrowser):
                     data, was_decompressed, encoded_md5 = cache_item.data, False, None
                     if data is not None and metadata is not None:
                         content_encoding = (metadata.get_attribute('content-encoding') or [''])[0]
-                        was_decompressed, data = ccl_chromium_reader.ChromiumProfileFolder._decompress_cache_data(
-                            data, content_encoding)
-                        if was_decompressed:
+                        # Decoded here and not by ccl, whose decoders put no limit on
+                        # how much a body may expand to. See content_encoding.py.
+                        try:
+                            decoded = content_encoding_decode(data, content_encoding)
+                        except NotDecodable:
+                            decoded = None
+                        except DecodedSizeExceeded as e:
+                            decoded = None
+                            oversized_bodies += 1
+                            log.warning(f' - Cached body of {cache_key.url} was not decoded: its '
+                                        f'{len(data)} bytes of {e.encoding} expand to more than '
+                                        f'{e.limit} bytes')
+                        if decoded is not None:
+                            was_decompressed, data = True, decoded
                             encoded_md5 = hashlib.md5(cache_item.data, usedforsecurity=False).hexdigest()
 
                     parsed_item = WebBrowser.CacheItem(
@@ -4108,6 +4122,11 @@ class Chrome(WebBrowser):
             log.warning(f' - {unhashed_bodies} cached bodies were not hashed; their '
                         f'content-encoding could not be decoded, so the bytes on disk '
                         f'are not the resource')
+
+        if oversized_bodies:
+            log.warning(f' - {oversized_bodies} of those were left encoded because of how '
+                        f'much they expand to; each is named above. A body that small on '
+                        f'disk and that large decoded is unusual')
 
         self.parsed_artifacts.extend(results)
         return unparsed.result(len(results))
