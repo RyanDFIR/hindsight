@@ -79,6 +79,22 @@ jobs:
         shell: bash
         run: ./dist-ci/hindsight --help
 
+      # pywin32 is optional at run time. Without it the exe still starts and parses,
+      # and only loses the ability to decrypt cookies and passwords, so the --help
+      # test above cannot tell. Look for the module in the exe itself.
+      - name: Check Windows decryption support is bundled
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          for exe in hindsight hindsight_gui; do
+            python -m PyInstaller.utils.cliutils.archive_viewer -l "dist-ci/$exe.exe" > listing.txt
+            if ! grep -qi 'win32crypt' listing.txt; then
+              echo "::error::win32crypt is not bundled in $exe.exe"
+              exit 1
+            fi
+            echo "win32crypt is bundled in $exe.exe"
+          done
+
       - name: Rename binaries per platform
         shell: bash
         run: |
