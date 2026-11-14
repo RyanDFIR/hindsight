@@ -110,6 +110,7 @@ jobs:
       - name: Download all binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: binaries-* # not the sdist and wheel, which go to PyPI
           path: upload
           merge-multiple: true
 
@@ -120,17 +121,13 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" upload/* --clobber --repo "$GITHUB_REPOSITORY" \
             || gh release create "$GITHUB_REF_NAME" upload/* --draft --generate-notes --repo "$GITHUB_REPOSITORY"
 
-  publish-pypi:
-    name: Publish to PyPI
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build # don't publish if any platform binary failed to build
+  # Builds the sdist and wheel, and cannot publish them. Building runs third-party
+  # code (build and setuptools), so it happens here, in a job with a read-only token
+  # and no id-token, and the files are handed to publish-pypi as an artifact. Runs on
+  # manual runs too, so the packaging can be checked without cutting a release.
+  build-dist:
+    name: Build sdist and wheel
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/pyhindsight/
-    permissions:
-      contents: read
-      id-token: write # required for PyPI trusted publishing (OIDC)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -138,9 +135,37 @@ jobs:
         with:
           python-version: '3.13'
 
+      # requirements-dist.txt pins build and setuptools with hashes, the same way
+      # requirements-build.txt does for the binaries. --no-isolation makes build use
+      # them. Left to itself it installs the newest setuptools into its own environment.
+      - name: Install build tools
+        run: pip install --require-hashes -r requirements-dist.txt
+
       - name: Build sdist and wheel
-        run: |
-          pip install build
-          python -m build
+        run: python -m build --no-isolation
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dist
+          path: dist/*
+          if-no-files-found: error
+
+  # The only job that can publish to PyPI. It has no checkout and installs nothing:
+  # it downloads the files build-dist made and hands them to the publish action.
+  publish-pypi:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, build-dist] # don't publish if any platform binary failed to build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pyhindsight/
+    permissions:
+      id-token: write # required for PyPI trusted publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-dist
+          path: dist
 
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
