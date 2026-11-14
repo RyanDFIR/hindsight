@@ -1,7 +1,9 @@
 import datetime
 import os
 import struct
+import tempfile
 import unittest
+from unittest import mock
 
 from pyhindsight.browsers.firefox import Firefox
 
@@ -85,6 +87,49 @@ class TestMozLz4Decoder(unittest.TestCase):
             self.assertIsNone(Firefox._decompress_jsonlz4(tmp))
         finally:
             os.remove(tmp)
+
+    # Token 0x1F: one literal byte, then a match whose length carries on in the bytes
+    # after the offset. Each 0xFF there adds 255 bytes of output.
+    @staticmethod
+    def _run_of_a(extra_length_bytes):
+        return b'\x1FA' + struct.pack('<H', 1) + extra_length_bytes
+
+    def _decompress_file(self, content):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'recovery.jsonlz4')
+            with open(path, 'wb') as f:
+                f.write(content)
+            with mock.patch('pyhindsight.browsers.firefox.log') as log:
+                result = Firefox._decompress_jsonlz4(path)
+            self.warnings = [call.args[0] for call in log.warning.call_args_list]
+            return result
+
+    def test_a_match_that_fills_the_declared_size_exactly_is_decoded(self):
+        # 1 literal + a match of 4 + 15 + 0 bytes.
+        self.assertEqual(b'A' * 20, Firefox._lz4_block_decompress(self._run_of_a(b'\x00'), 20))
+
+    def test_a_block_that_decodes_past_its_declared_size_is_refused(self):
+        # 1,005 bytes of input standing for 255,020 bytes of output.
+        bomb = self._run_of_a(b'\xFF' * 1000 + b'\x00')
+        with self.assertRaises(ValueError):
+            Firefox._lz4_block_decompress(bomb, 100)
+        self.assertEqual(b'A' * 255020, Firefox._lz4_block_decompress(bomb, 255020))
+
+    def test_literals_past_the_declared_size_are_refused(self):
+        with self.assertRaises(ValueError):
+            Firefox._lz4_block_decompress(b'\x50hello', 4)
+
+    def test_a_file_that_decodes_past_its_declared_size_is_reported_and_skipped(self):
+        bomb = self._run_of_a(b'\xFF' * 1000 + b'\x00')
+        self.assertIsNone(self._decompress_file(b'mozLz40\x00' + struct.pack('<I', 100) + bomb))
+        self.assertEqual(1, len(self.warnings))
+        self.assertIn('more than its declared size', self.warnings[0])
+
+    def test_a_file_declaring_more_than_the_most_accepted_is_reported_and_skipped(self):
+        too_big = Firefox._MOZLZ4_MAX_SIZE + 1
+        self.assertIsNone(self._decompress_file(b'mozLz40\x00' + struct.pack('<I', too_big) + b'\x50hello'))
+        self.assertEqual(1, len(self.warnings))
+        self.assertIn('not decompressed', self.warnings[0])
 
 
 class TestStructuredCloneReader(unittest.TestCase):
