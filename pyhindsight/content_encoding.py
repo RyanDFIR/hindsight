@@ -16,6 +16,11 @@ import zstd
 # remarkable, and it is small enough that decoding one does no harm.
 MAX_DECODED_SIZE = 256 * 1024 * 1024
 
+# The most that the bodies of one cache may grow by when decoded, counted as decoded
+# size less stored size. The limit above is on each body, and a cache can hold
+# thousands of bodies that each stay just under it. The caller keeps this count.
+MAX_CACHE_EXPANSION = 4 * 1024 * 1024 * 1024
+
 _ZSTD_FRAME_MAGIC = 0xFD2FB528
 _ZSTD_SKIPPABLE_MAGIC = 0x184D2A50  # the low four bits vary
 

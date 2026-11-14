@@ -1,5 +1,4 @@
 import datetime
-import functools
 import gzip
 import hashlib
 import inspect
@@ -155,16 +154,16 @@ class TestGetCacheLimitsDecodedSize(unittest.TestCase):
 
     LIMIT = 64 * 1024
 
-    def get_cache(self, bodies):
+    def get_cache(self, bodies, cache_expansion=content_encoding.MAX_CACHE_EXPANSION):
         profile = FakeProfile(list(bodies), metadata={url: _GzipMetadata() for url in bodies}, bodies=bodies)
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = os.path.join(tmp, 'Cache_Data')
             os.makedirs(cache_dir)
             open(os.path.join(cache_dir, 'index'), 'wb').close()
             browser = Chrome(tmp)
-            limited = functools.partial(content_encoding.decode, max_size=self.LIMIT)
             with mock.patch.object(chrome.ccl_chromium_reader, 'ChromiumProfileFolder', return_value=profile), \
-                    mock.patch.object(chrome, 'content_encoding_decode', limited), \
+                    mock.patch.object(content_encoding, 'MAX_DECODED_SIZE', self.LIMIT), \
+                    mock.patch.object(content_encoding, 'MAX_CACHE_EXPANSION', cache_expansion), \
                     mock.patch('pyhindsight.browsers.chrome.log') as log:
                 browser.get_cache(tmp, 'Cache_Data')
             self.warnings = [call.args[0] for call in log.warning.call_args_list]
@@ -190,6 +189,33 @@ class TestGetCacheLimitsDecodedSize(unittest.TestCase):
         self.assertIsNone(left.encoded_md5)
         self.assertTrue(any('https://bomb/ was not decoded' in line for line in self.warnings), self.warnings)
         self.assertTrue(any('1 of those were left encoded' in line for line in self.warnings), self.warnings)
+
+    def test_bodies_under_the_limit_stop_being_decoded_once_they_add_up(self):
+        # Each is under the limit for one body. Together they are allowed to grow by
+        # 100 KiB, which the first two use most of.
+        plain = b'\0' * (40 * 1024)
+        body = gzip.compress(plain)
+        urls = ['https://one/', 'https://two/', 'https://three/', 'https://four/']
+
+        items = self.get_cache({url: body for url in urls}, cache_expansion=100 * 1024)
+
+        self.assertEqual([plain, plain, body, body], [items[url].data for url in urls])
+        self.assertEqual([True, True, False, False], [items[url].body_sha256 is not None for url in urls])
+        # Counted, and not named one by one.
+        self.assertFalse(any('was not decoded' in line for line in self.warnings), self.warnings)
+        self.assertTrue(any('2 of those were left encoded because the bodies decoded before them' in line
+                            for line in self.warnings), self.warnings)
+
+    def test_a_body_that_does_not_grow_is_decoded_after_the_allowance_is_spent(self):
+        grows = gzip.compress(b'\0' * (40 * 1024))
+        small = gzip.compress(b'x')  # longer encoded than decoded
+        self.assertGreater(len(small), 1)
+
+        items = self.get_cache({'https://grows/': grows, 'https://again/': grows, 'https://small/': small},
+                               cache_expansion=40 * 1024)
+
+        self.assertEqual(grows, items['https://again/'].data)
+        self.assertEqual(b'x', items['https://small/'].data)
 
 
 if __name__ == '__main__':
