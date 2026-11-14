@@ -48,7 +48,7 @@ jobs:
     outputs:
       roots: ${{ steps.roots.outputs.roots }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: roots
         run: |
           roots=$(python3 -c 'import json,pathlib;print(json.dumps(sorted(p.stem for p in pathlib.Path("tests/corpus/baselines").glob("*.json"))))')
@@ -64,9 +64,9 @@ jobs:
       matrix:
         root: ${{ fromJSON(needs.discover.outputs.roots) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.13'
           cache: pip
@@ -86,17 +86,22 @@ jobs:
       # caching it would crowd out the pip caches the other workflows depend on and then
       # get evicted itself. A release asset pulled from GitHub to a GitHub runner is fast
       # enough that the cache was buying very little for that price.
+      # The root's name reaches the script through the environment, not by being
+      # written into it. It comes from a baseline's file name, which a pull request
+      # controls, and ${{ }} is pasted in before the shell parses the script.
       - name: Download and extract corpus root
+        env:
+          ROOT: ${{ matrix.root }}
         run: |
           mkdir -p corpus
-          url="https://github.com/${CORPUS_REPO}/releases/download/${CORPUS_TAG}/${{ matrix.root }}.tar.gz"
+          url="https://github.com/${CORPUS_REPO}/releases/download/${CORPUS_TAG}/${ROOT}.tar.gz"
           echo "Fetching $url"
           # --fail so a 404 stops the job here, with the URL in the log, rather than
           # leaving tar to fail on an HTML error page.
           curl --fail --location --silent --show-error --output root.tar.gz "$url"
           tar -xzf root.tar.gz -C corpus
           rm root.tar.gz
-          du -sh "corpus/${{ matrix.root }}"
+          du -sh "corpus/${ROOT}"
 
       - name: Run end-to-end parse
         env:

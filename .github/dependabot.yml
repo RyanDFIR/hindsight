@@ -1,0 +1,13 @@
+# The workflows pin each action to a commit, with the release it belongs to in a
+# comment beside it. A tag can be moved to different code after the fact and a commit
+# cannot, but a pin goes stale, so Dependabot opens a pull request when an action has
+# a new release. One a week, with every update in it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

@@ -1,0 +1,17 @@
+# What the sdist and wheel that go to PyPI are built with: the "build" front end and
+# setuptools, the backend pyproject.toml names.
+#
+# requirements-dist.txt is generated from this file and is what the build-binaries
+# workflow installs, with --require-hashes, before it runs
+# "python -m build --no-isolation". Without --no-isolation, build makes its own
+# environment and installs the newest setuptools into it, which would bypass the pins.
+#
+# To refresh it, after checking what changed in the new versions:
+#
+#   pip install uv
+#   uv pip compile requirements-dist.in --universal --generate-hashes \
+#       --python-version 3.13 --output-file requirements-dist.txt
+#
+# Keep the setuptools floor the same as build-system.requires in pyproject.toml.
+build
+setuptools>=77
