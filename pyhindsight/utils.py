@@ -707,13 +707,16 @@ def get_rich_banner():
     Returns a colored version of the banner using Rich Text.
     - Dim for outline characters
     - White for attribution text
-    - Green for ▼ (or • if Unicode not supported) and . characters
+    - Green for ▼ (or * if the output encoding cannot take it) and . characters
     """
     import rich.text
     import re
 
-    # Use cp1252-safe '•' if the console doesn't support Unicode
-    triangle_char = '▼' if _supports_unicode() else '•'
+    # Fall back to plain ASCII. This happens when stdout is redirected on Windows and
+    # is cp1252, and whatever reads those bytes next may assume another encoding: a
+    # cp1252 bullet came out as a different character in a PowerShell pipe and as an
+    # invalid byte to anything expecting UTF-8. ASCII reads the same in all of them.
+    triangle_char = '▼' if _supports_unicode() else '*'
     current_banner = _get_banner(triangle_char)
 
     banner_lines = current_banner.rstrip('\n').split('\n')[1:]  # [1:] to skip first empty line from triple quote
@@ -737,7 +740,7 @@ def get_rich_banner():
                 colored_text.append(line, style="dim")
         else:
             for char in line:
-                if char in ('▼', '•'):
+                if char in ('▼', '*'):
                     colored_text.append(char, style="green")
                 else:
                     colored_text.append(char, style="dim")
