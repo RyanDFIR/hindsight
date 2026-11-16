@@ -44,6 +44,35 @@ class TestCommandLineRuns(unittest.TestCase):
                 records = [json.loads(line) for line in f if line.strip()]
             self.assertTrue(records)
 
+    def _run_from(self, cwd, *args):
+        """Run the CLI from `cwd`, which is not the directory hindsight.py is in."""
+        return subprocess.run(
+            [sys.executable, os.path.join(REPO_ROOT, 'hindsight.py'),
+             '-i', os.path.join(REPO_ROOT, FIXTURE), '-o', 'out', '-f', 'jsonl', *args],
+            cwd=cwd, capture_output=True, text=True, timeout=300)
+
+    def test_relative_log_and_temp_paths_are_relative_to_the_working_directory(self):
+        # They used to be joined to the directory of the script, so this run looked for
+        # a `logs` folder beside hindsight.py and died in the logging setup.
+        with tempfile.TemporaryDirectory() as tmp:
+            os.mkdir(os.path.join(tmp, 'logs'))
+            result = self._run_from(tmp, '-l', os.path.join('logs', 'run.log'),
+                                    '--temp_dir', 'scratch')
+            self.assertEqual(0, result.returncode,
+                             f'stdout:\n{result.stdout}\nstderr:\n{result.stderr}')
+            self.assertTrue(os.path.getsize(os.path.join(tmp, 'logs', 'run.log')) > 0)
+            self.assertTrue(os.path.exists(os.path.join(tmp, 'out.jsonl')))
+            self.assertFalse(os.path.exists(os.path.join(REPO_ROOT, 'logs', 'run.log')))
+
+    def test_the_default_log_goes_to_the_working_directory(self):
+        # After a pip install the script's directory is the environment's bin or Scripts
+        # folder, which is not where anyone looks for a log and is not always writable.
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run_from(tmp)
+            self.assertEqual(0, result.returncode,
+                             f'stdout:\n{result.stdout}\nstderr:\n{result.stderr}')
+            self.assertTrue(os.path.getsize(os.path.join(tmp, 'hindsight.log')) > 0)
+
     def test_every_output_format_completes(self):
         for fmt in ('jsonl', 'sqlite', 'xlsx'):
             with self.subTest(fmt=fmt), tempfile.TemporaryDirectory() as tmp:

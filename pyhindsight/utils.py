@@ -685,6 +685,20 @@ def _supports_unicode():
         return False
 
 
+def default_work_dir():
+    """Where the log and the temp directory go when no path is given for them.
+
+    A packaged exe keeps them beside itself: it is often started by double-clicking,
+    and the working directory is then wherever the shell happened to be. Run any other
+    way, it is the working directory. It used to be the directory of the script, which
+    after a pip install is the environment's bin or Scripts folder, or site-packages:
+    not where anyone looks for a log, and not always writable.
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.getcwd()
+
+
 def make_stdout_resilient():
     """Degrade unencodable characters on stdout instead of raising.
 

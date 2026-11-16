@@ -12,7 +12,7 @@ import pyhindsight
 import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
 from pyhindsight.logging_setup import DEFAULT_LOG_LEVEL, configure_logging
-from pyhindsight.utils import get_rich_banner, make_stdout_resilient
+from pyhindsight.utils import default_work_dir, get_rich_banner, make_stdout_resilient
 import rich.align
 import rich.console
 
@@ -158,11 +158,9 @@ def do_run():
     browser_type = bottle.request.forms.get('browser_type')
     analysis_session.browser_type = browser_type if browser_type else None
     analysis_session.timezone = bottle.request.forms.get('timezone')
-    # Get base directory for resolving relative paths (exe dir for frozen apps)
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.realpath(__file__))
+    # A relative path in the form is taken from beside the exe when packaged, and from
+    # the directory the server was started in otherwise. See default_work_dir().
+    base_dir = default_work_dir()
 
     log_path = bottle.request.forms.get('log_path')
     if not os.path.isabs(log_path):

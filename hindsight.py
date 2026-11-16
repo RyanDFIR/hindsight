@@ -22,7 +22,7 @@ import pyhindsight.plugins
 from pyhindsight.analysis import AnalysisSession
 from pyhindsight.artifact_filter import ArtifactFilter, UnknownArtifactError, format_catalog
 from pyhindsight.logging_setup import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging
-from pyhindsight.utils import get_rich_banner, make_stdout_resilient, parse_timezone
+from pyhindsight.utils import default_work_dir, get_rich_banner, make_stdout_resilient, parse_timezone
 
 import rich.align
 import rich.console
@@ -30,13 +30,6 @@ import rich.live
 import rich.spinner
 import rich.table
 import rich.text
-
-
-def get_base_dir():
-    """Get base directory for resolving relative paths (exe dir for frozen apps)."""
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.realpath(__file__))
 
 
 def timezone_argument(value):
@@ -97,7 +90,7 @@ The Chrome Profile folder default locations are:
     parser.add_argument('-f', '--format', choices=analysis_session.available_output_formats,
                         default=analysis_session.available_output_formats[-1], help='Output format')
     parser.add_argument('-l', '--log', help='Location Hindsight should log to (will append if exists)',
-                        default=os.path.join(get_base_dir(), 'hindsight.log'))
+                        default=os.path.join(default_work_dir(), 'hindsight.log'))
     parser.add_argument('--log-level', '--log_level', choices=list(LOG_LEVELS), default=DEFAULT_LOG_LEVEL,
                         help='How much detail to write to the log. "info" (the default) keeps the '
                              "run's options and input listing, the per-artifact counts, the skip and "
@@ -128,7 +121,7 @@ The Chrome Profile folder default locations are:
                         help='Print the artifact names accepted by --only and --skip, then exit.')
     parser.add_argument('--nocopy', '--no_copy', help='Don\'t copy files before opening them; this might run faster, '
                                                       'but some locked files may be inaccessible', action='store_true')
-    parser.add_argument('--temp_dir', default=os.path.join(get_base_dir(), 'hindsight-temp'),
+    parser.add_argument('--temp_dir', default=os.path.join(default_work_dir(), 'hindsight-temp'),
                         help='If files are copied before being opened, use this directory as the copy destination')
 
     # --list-artifacts is informational and shouldn't require -i, so handle it before
@@ -155,12 +148,12 @@ The Chrome Profile folder default locations are:
     except OSError as e:
         parser.error(f'cannot read the input directory "{args.input}": {e.strerror or e}')
 
-    # Convert any relative paths to absolute using base directory
-    base_dir = get_base_dir()
-    if not os.path.isabs(args.log):
-        args.log = os.path.join(base_dir, args.log)
-    if not os.path.isabs(args.temp_dir):
-        args.temp_dir = os.path.join(base_dir, args.temp_dir)
+    # A relative path the user typed is relative to where they ran the command, the same
+    # as -i and -o. The defaults above are already absolute. These used to be joined to
+    # the directory of the exe or script, so `-l case/run.log` looked for a `case`
+    # folder beside the program and failed when there was none.
+    args.log = os.path.abspath(args.log)
+    args.temp_dir = os.path.abspath(args.temp_dir)
 
     # Disable decryption on Linux unless explicitly enabled and supported
     if args.decrypt == 'linux' and analysis_session.available_decrypts['linux'] == 1:
