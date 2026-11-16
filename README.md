@@ -15,14 +15,14 @@ The only field you are required to complete is "Profile Path". This is the locat
 
 ## Manual Installation
 
-To install Hindsight (both the command line tool and the web interface), do:
+Hindsight needs Python 3.11 or newer. To install it (both the command line tool and the web interface), do:
 ```sh
 pip install pyhindsight
 ```
 
-If you'd like to use the "View SQLite DB in Browser" feature in the Hindsight web interface, you'll need to run another install command:
+The "View SQLite DB in Browser" feature in the Hindsight web interface is not part of that install. It is only available when running Hindsight from a clone of this repository, and it needs Node.js and npm to build. From the root of the clone, run:
 ```sh
-curl -sSL https://raw.githubusercontent.com/RyanDFIR/hindsight/main/install-js.sh | sh
+sh install-js.sh
 ```
 
 ## Command Line
