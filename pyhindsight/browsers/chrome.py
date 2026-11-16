@@ -21,6 +21,7 @@ from pyhindsight.browsers import chromium_schema_versions
 from pyhindsight.browsers.webbrowser import (
     ParseFailures, WebBrowser, timeline_sort_key)
 from pyhindsight import utils
+from pyhindsight import content_encoding as body_decoder
 
 # Try to import optional modules - do nothing on failure, as status is tracked elsewhere
 try:
@@ -3987,6 +3988,13 @@ class Chrome(WebBrowser):
         cache_items = iterate_cache_entries(profile, decompress=False)
         source_item = utils.relpath(os.path.join(path, dir_name), self.profile_path)
         unhashed_bodies = 0
+        oversized_bodies = 0
+        # Decoded bodies stay in memory until the run ends, so a limit on each one is
+        # not a limit on all of them: a thousand small entries that each expand to just
+        # under it add up. This is how much larger than their stored size the bodies
+        # of this cache may still become.
+        expansion_left = body_decoder.MAX_CACHE_EXPANSION
+        over_budget_bodies = 0
         untimed_entries = 0
         phantom_locations = 0
 
@@ -4053,9 +4061,28 @@ class Chrome(WebBrowser):
                     data, was_decompressed, encoded_md5 = cache_item.data, False, None
                     if data is not None and metadata is not None:
                         content_encoding = (metadata.get_attribute('content-encoding') or [''])[0]
-                        was_decompressed, data = ccl_chromium_reader.ChromiumProfileFolder._decompress_cache_data(
-                            data, content_encoding)
-                        if was_decompressed:
+                        # Decoded here and not by ccl, whose decoders put no limit on
+                        # how much a body may expand to. See content_encoding.py.
+                        body_limit = body_decoder.MAX_DECODED_SIZE
+                        allowed = min(body_limit, len(data) + expansion_left)
+                        try:
+                            decoded = body_decoder.decode(data, content_encoding, max_size=allowed)
+                        except body_decoder.NotDecodable:
+                            decoded = None
+                        except body_decoder.DecodedSizeExceeded as e:
+                            decoded = None
+                            if allowed == body_limit:
+                                oversized_bodies += 1
+                                log.warning(f' - Cached body of {cache_key.url} was not decoded: its '
+                                            f'{len(data)} bytes of {e.encoding} expand to more than '
+                                            f'{e.limit} bytes')
+                            else:
+                                # Not named one by one: once the allowance is spent this
+                                # can be every body left in the cache.
+                                over_budget_bodies += 1
+                        if decoded is not None:
+                            expansion_left -= max(0, len(decoded) - len(data))
+                            was_decompressed, data = True, decoded
                             encoded_md5 = hashlib.md5(cache_item.data, usedforsecurity=False).hexdigest()
 
                     parsed_item = WebBrowser.CacheItem(
@@ -4108,6 +4135,17 @@ class Chrome(WebBrowser):
             log.warning(f' - {unhashed_bodies} cached bodies were not hashed; their '
                         f'content-encoding could not be decoded, so the bytes on disk '
                         f'are not the resource')
+
+        if oversized_bodies:
+            log.warning(f' - {oversized_bodies} of those were left encoded because of how '
+                        f'much they expand to; each is named above. A body that small on '
+                        f'disk and that large decoded is unusual')
+
+        if over_budget_bodies:
+            log.warning(f' - {over_budget_bodies} of those were left encoded because the '
+                        f'bodies decoded before them had already grown by '
+                        f'{body_decoder.MAX_CACHE_EXPANSION} bytes in total, the most '
+                        f'allowed for one cache')
 
         self.parsed_artifacts.extend(results)
         return unparsed.result(len(results))

@@ -1008,11 +1008,18 @@ class Firefox(WebBrowser):
 
     # 8-byte magic for Mozilla's mozLz40 wrapper: magic + uint32 LE decompressed size + LZ4 block.
     _MOZLZ4_MAGIC = b'mozLz40\x00'
+    # The declared size is a uint32 the file supplies, so up to 4 GiB. Session and
+    # bookmark files are JSON and far smaller than this.
+    _MOZLZ4_MAX_SIZE = 256 * 1024 * 1024
 
     @staticmethod
     def _lz4_block_decompress(src, dest_size):
         # LZ4 block format: token byte (hi=literal_len, lo=match_len), optional 0xff
         # overflow chains for both lengths, literal bytes, 2-byte LE match offset.
+        #
+        # dest_size is the decoded size the file declares, and the output is never
+        # allowed past it. A match can stand for 255 bytes of output per byte of input,
+        # so without that check a file's content decides how much memory this takes.
         out = bytearray()
         i = 0
         n = len(src)
@@ -1027,6 +1034,8 @@ class Firefox(WebBrowser):
                     literal_len += b
                     if b != 0xFF:
                         break
+            if len(out) + literal_len > dest_size:
+                raise ValueError('lz4: block decodes to more than its declared size')
             out.extend(src[i:i + literal_len])
             i += literal_len
             if i >= n:
@@ -1045,6 +1054,8 @@ class Firefox(WebBrowser):
                     match_len += b
                     if b != 0xFF:
                         break
+            if len(out) + match_len > dest_size:
+                raise ValueError('lz4: block decodes to more than its declared size')
             # Byte-by-byte copy so overlapping windows (RLE-style runs) work.
             for _ in range(match_len):
                 out.append(out[-offset])
@@ -1064,6 +1075,10 @@ class Firefox(WebBrowser):
                 if len(size_bytes) != 4:
                     return None
                 dest_size = struct.unpack('<I', size_bytes)[0]
+                if dest_size > cls._MOZLZ4_MAX_SIZE:
+                    log.warning(f' - {path}: not decompressed, it declares a decoded size of '
+                                f'{dest_size} bytes and the most accepted is {cls._MOZLZ4_MAX_SIZE}')
+                    return None
                 payload = fh.read()
         except OSError as e:
             log.warning(f' - Could not read {path}: {e}')
