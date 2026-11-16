@@ -3161,6 +3161,11 @@ class Firefox(WebBrowser):
         pass
 
     class BrowserExtension(WebBrowser.BrowserExtension):
+        # Only extensions.json is read. Nothing below is looked for, in the XPI or
+        # anywhere else in the profile.
+        not_parsed = ('content scripts', 'dynamic scripts', 'granted and withheld permissions',
+                      'DNR rules', 'extension storage')
+
         @property
         def source(self):
             # The base class reports Chrome's disk / Secure Preferences presence.

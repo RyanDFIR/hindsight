@@ -3309,7 +3309,17 @@ class AnalysisSession(object):
                         write_script_row(f'{base} ({tag})', cs, rec_format, rec_center_format)
                         wrote_child = True
 
-                    if not wrote_child:
+                    # What the parser for this browser never reads. Written even when
+                    # there are rows above, and instead of the placeholder below, which
+                    # would say there are no content scripts when nobody looked.
+                    not_parsed = getattr(ext, 'not_parsed', None)
+                    if not_parsed:
+                        ext_ws.write(row_number, 0, '', none_format)
+                        ext_ws.write_string(row_number, 1, 'not parsed by Hindsight', none_format)
+                        ext_ws.write_string(row_number, 2, ', '.join(not_parsed), none_format)
+                        ext_ws.write_string(row_number, 7, profile, none_format)
+                        row_number += 1
+                    elif not wrote_child:
                         ext_ws.write(row_number, 0, '', none_format)
                         ext_ws.write_string(row_number, 1, '(no declarative content scripts)', none_format)
                         ext_ws.write_string(row_number, 7, profile, none_format)

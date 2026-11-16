@@ -71,6 +71,35 @@ class TestExtensionSheets(unittest.TestCase):
                      'Signing: Signed', 'Installed: 2024-01-15', 'Updated: 2024-01-22'):
             self.assertIn(part, firefox)
 
+    def _child_rows(self):
+        """The rows under each extension's header row, keyed by the profile they name."""
+        rows = {}
+        for row in self.workbook['Extensions'].iter_rows(min_row=3, values_only=True):
+            if row[1]:
+                rows.setdefault(row[7], []).append((row[1], row[2]))
+        return rows
+
+    def test_firefox_rows_say_what_was_not_parsed(self):
+        # Firefox reads extensions.json only, so it never has content scripts to show.
+        # The sheet has to say they were not looked for, not that there are none.
+        firefox_profile = self.session.installed_extensions['data'][1].profile
+        rows = self._child_rows()[firefox_profile]
+        labels = [label for label, _ in rows]
+        self.assertIn('permissions', labels)
+        self.assertNotIn('(no declarative content scripts)', labels)
+        self.assertEqual(
+            'content scripts, dynamic scripts, granted and withheld permissions, '
+            'DNR rules, extension storage',
+            dict(rows)['not parsed by Hindsight'])
+
+    def test_chrome_rows_keep_the_no_content_scripts_placeholder(self):
+        self.assertEqual([('(no declarative content scripts)', None)],
+                         self._child_rows()['chrome-profile'])
+
+    def test_what_was_not_parsed_stays_out_of_the_records(self):
+        for ext in self.session.installed_extensions['data']:
+            self.assertNotIn('not_parsed', vars(ext))
+
 
 if __name__ == '__main__':
     unittest.main()
