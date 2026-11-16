@@ -15,6 +15,9 @@ cd hindsight
 pip install -r requirements.txt --group test
 ```
 
+`--group` needs pip 25.1 or newer. If pip does not recognize the option, run
+`python -m pip install --upgrade pip` first.
+
 ## The two test suites
 
 **Unit tests** are fast, self-contained and need no setup. No network, no platform
