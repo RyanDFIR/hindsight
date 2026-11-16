@@ -7,8 +7,6 @@ Internet history forensics for Google Chrome/Chromium and Mozilla Firefox
 
 Hindsight is a free tool for analyzing web artifacts. It started with the browsing history of the Google Chrome web browser, has expanded to support other Chromium-based applications, and now also parses Mozilla Firefox profiles. Hindsight can parse a number of different types of web artifacts, including URLs, download history, cache records, bookmarks, autofill records, saved passwords, preferences, browser extensions, HTTP cookies, and Local Storage records (HTML5 cookies). Once the data is extracted from each file, it is correlated with data from other history files and placed in a timeline.
 
-For Firefox profiles, Hindsight parses history, bookmarks and downloads (``places.sqlite``), cookies, form history, saved logins, sessions, the cache, site permissions, preferences and installed add-ons. Firefox support is not as deep as Chrome's: run ``hindsight.py --list-artifacts`` to see which artifacts are read for which browser. Hindsight works out whether a profile is Chrome or Firefox by itself, so point it at a profile directory such as ``\[userdir]\AppData\Roaming\Mozilla\Firefox\Profiles\<profile>``.
-
 It has a simple web UI - to start it, run "hindsight_gui.py" (or on Windows, the packaged "hindsight_gui.exe") and visit http://localhost:8080 in a browser:  
 
 <img src="https://raw.githubusercontent.com/RyanDFIR/hindsight/main/documentation/interface-v2.gif"/>
