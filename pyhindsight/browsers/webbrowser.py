@@ -1201,7 +1201,7 @@ class WebBrowser(object):
     class BrowserExtension(object):
         # Extension details that Hindsight does not read for this browser at all. The
         # Extensions worksheet names them, so that a missing row is not taken to mean
-        # the extension has none. A class attribute, so it stays out of the records.
+        # the extension has none, and the JSONL and SQLite writers add it to each record.
         not_parsed = ()
 
         def __init__(self, profile, ext_id, name, description, version, permissions, manifest,

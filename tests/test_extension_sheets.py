@@ -1,17 +1,23 @@
 import datetime
 import io
+import json
 import os
+import shutil
+import sqlite3
+import tempfile
 import types
 import unittest
 
 import openpyxl
 
-from pyhindsight.analysis import AnalysisSession
+from pyhindsight.analysis import AnalysisSession, HindsightEncoder
 from pyhindsight.browsers.firefox import Firefox
 from pyhindsight.browsers.webbrowser import WebBrowser
 
 UTC = datetime.timezone.utc
 FIXTURE_DIR = os.path.join('tests', 'fixtures', 'firefox')
+NOT_PARSED = ['content scripts', 'dynamic scripts', 'granted and withheld permissions',
+              'DNR rules', 'extension storage']
 
 
 def _chrome_analysis():
@@ -87,18 +93,40 @@ class TestExtensionSheets(unittest.TestCase):
         labels = [label for label, _ in rows]
         self.assertIn('permissions', labels)
         self.assertNotIn('(no declarative content scripts)', labels)
-        self.assertEqual(
-            'content scripts, dynamic scripts, granted and withheld permissions, '
-            'DNR rules, extension storage',
-            dict(rows)['not parsed by Hindsight'])
+        self.assertEqual(', '.join(NOT_PARSED), dict(rows)['not parsed by Hindsight'])
 
     def test_chrome_rows_keep_the_no_content_scripts_placeholder(self):
         self.assertEqual([('(no declarative content scripts)', None)],
                          self._child_rows()['chrome-profile'])
 
-    def test_what_was_not_parsed_stays_out_of_the_records(self):
-        for ext in self.session.installed_extensions['data']:
-            self.assertNotIn('not_parsed', vars(ext))
+    def test_jsonl_names_what_was_not_parsed_and_leaves_those_fields_out(self):
+        chrome, firefox = (json.loads(json.dumps(ext, cls=HindsightEncoder))
+                           for ext in self.session.installed_extensions['data'])
+
+        self.assertEqual(NOT_PARSED, firefox['not_parsed'])
+        # An empty list would say the add-on has no content scripts.
+        for field in ('content_scripts', 'dynamic_scripts', 'granted_api',
+                      'granted_scriptable_host', 'on_disk', 'in_secure_prefs'):
+            self.assertNotIn(field, firefox)
+        self.assertEqual('{"permissions": ["storage", "webRequest"], "origins": ["<all_urls>"]}',
+                         firefox['permissions'])
+
+        self.assertNotIn('not_parsed', chrome)
+        self.assertEqual([], chrome['content_scripts'])
+        self.assertIs(False, chrome['on_disk'])
+
+    def test_sqlite_names_what_was_not_parsed(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = os.path.join(directory, 'out.sqlite')
+        self.session.generate_sqlite(path)
+
+        con = sqlite3.connect(path)
+        try:
+            rows = con.execute('SELECT name, not_parsed FROM installed_extensions').fetchall()
+        finally:
+            con.close()
+        self.assertEqual([('Slides', None), ('uBlock Origin', ', '.join(NOT_PARSED))], rows)
 
 
 if __name__ == '__main__':

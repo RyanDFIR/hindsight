@@ -449,6 +449,11 @@ class HindsightEncoder(json.JSONEncoder):
 
             item['message'] = f'{item.get("name", "")} ({item.get("version", "")})'
 
+            # Firefox leaves the script and permission fields out of the record. Say
+            # that they were not read, so their absence is not taken for "none".
+            if obj.not_parsed:
+                item['not_parsed'] = list(obj.not_parsed)
+
             return item
 
         if isinstance(obj, Chrome.CookieItem):
@@ -3450,7 +3455,7 @@ class AnalysisSession(object):
 
             c.execute(
                 'CREATE TABLE installed_extensions(name TEXT, description TEXT, version TEXT, ext_id TEXT, '
-                'profile TEXT, permissions TEXT, manifest TEXT)')
+                'profile TEXT, permissions TEXT, manifest TEXT, not_parsed TEXT)')
 
             c.execute(
                 'CREATE TABLE extension_data(type TEXT, name TEXT, extension_id TEXT, key TEXT, value TEXT, '
@@ -3738,10 +3743,12 @@ class AnalysisSession(object):
                         permissions = json.dumps(permissions)
                     c.execute(
                         'INSERT INTO installed_extensions (name, description, version, ext_id, profile, '
-                        'permissions, manifest) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        'permissions, manifest, not_parsed) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                         (extension.name, extension.description, extension.version, extension.ext_id,
-                         extension.profile, permissions, extension.manifest))
+                         extension.profile, permissions, extension.manifest,
+                         # What this browser's parser does not read; NULL for Chrome.
+                         ', '.join(extension.not_parsed) or None))
 
             for preference_group in self.preferences:
                 title = preference_group.get('presentation', {}).get('title')
