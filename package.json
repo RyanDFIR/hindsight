@@ -1,7 +1,7 @@
 {
   "name": "hindsight",
   "version": "1.0.0",
-  "description": "Web browser forensics for Google Chrome/Chromium",
+  "description": "Web browser forensics for Google Chrome/Chromium and Mozilla Firefox",
   "main": "index.js",
   "type": "module",
   "directories": {

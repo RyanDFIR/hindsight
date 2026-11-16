@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyhindsight"
-description = "Browser forensics for Google Chrome/Chromium"
+description = "Browser forensics for Google Chrome/Chromium and Mozilla Firefox"
 readme = "README.md"
 requires-python = ">=3.11"
 # The BSD part is the Chromium .proto files under pyhindsight/lib/components and
@@ -17,7 +17,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0 AND BSD-3-Clause AND MIT"
 license-files = ["LICENSE.md"]
 authors = [{name = "Ryan Benson", email = "ryan@hindsig.ht"}]
-keywords = ["chrome", "forensics", "dfir", "google-chrome", "chromium"]
+keywords = ["chrome", "forensics", "dfir", "google-chrome", "chromium", "firefox", "browser"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Topic :: Security",

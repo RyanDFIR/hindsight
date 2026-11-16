@@ -1,35 +1,35 @@
-<img src="https://raw.githubusercontent.com/RyanDFIR/hindsight/main/pyhindsight/static/h.png" height="100px"/> Hindsight
+<img src="https://raw.githubusercontent.com/RyanDFIR/hindsight/main/documentation/clearer-in-hindsight.jpg" alt="Browser history is clearer in Hindsight" width="100%"/>
+
+Hindsight
 =========
 
 Internet history forensics for Google Chrome/Chromium and Mozilla Firefox
 
 Hindsight is a free tool for analyzing web artifacts. It started with the browsing history of the Google Chrome web browser, has expanded to support other Chromium-based applications, and now also parses Mozilla Firefox profiles. Hindsight can parse a number of different types of web artifacts, including URLs, download history, cache records, bookmarks, autofill records, saved passwords, preferences, browser extensions, HTTP cookies, and Local Storage records (HTML5 cookies). Once the data is extracted from each file, it is correlated with data from other history files and placed in a timeline.
 
-For Firefox profiles, Hindsight parses ``places.sqlite`` (history visits, bookmarks, and downloads), ``cookies.sqlite``, and ``formhistory.sqlite``. Select "Firefox" in the GUI or pass ``-b Firefox`` on the command line, pointing at a profile directory such as ``\[userdir]\AppData\Roaming\Mozilla\Firefox\Profiles\<profile>``.
-
 It has a simple web UI - to start it, run "hindsight_gui.py" (or on Windows, the packaged "hindsight_gui.exe") and visit http://localhost:8080 in a browser:  
 
 <img src="https://raw.githubusercontent.com/RyanDFIR/hindsight/main/documentation/interface-v2.gif"/>
 
-The only field you are required to complete is "Profile Path". This is the location of the Chrome profile you want to analyze (the default profile paths for different OSes is listed at the bottom of this page). Click "Run" and you'll be taken to the results page in where you can save the results to a spreadsheet (or other formats). 
+The only field you are required to complete is "Profile Path". This is the location of the browser profile you want to analyze (the default profile paths for different OSes are listed at the bottom of this page). Click "Run" and you'll be taken to the results page in where you can save the results to a spreadsheet (or other formats). 
 
 ## Manual Installation
 
-To install Hindsight (both the command line tool and the web interface), do:
+Hindsight needs Python 3.11 or newer. To install it (both the command line tool and the web interface), do:
 ```sh
 pip install pyhindsight
 ```
 
-If you'd like to use the "View SQLite DB in Browser" feature in the Hindsight web interface, you'll need to run another install command:
+The "View SQLite DB in Browser" feature in the Hindsight web interface is not part of that install. It is only available when running Hindsight from a clone of this repository, and it needs Node.js and npm to build. From the root of the clone, run:
 ```sh
-curl -sSL https://raw.githubusercontent.com/RyanDFIR/hindsight/main/install-js.sh | sh
+sh install-js.sh
 ```
 
 ## Command Line
 
-There also is a command line version of Hindsight - hindsight.py or hindsight.exe. The user guide in the documentation folder covers many topics, but the info below should get you started with the command line version:
+There also is a command line version of Hindsight - hindsight.py or hindsight.exe. After a pip install it is also available as `hindsight`, and the web interface as `hindsight-gui`. The user guide in the documentation folder covers many topics, but the info below should get you started with the command line version:
 
-Example usage:  \> C:\\hindsight.py -i "C:\Users\Ryan\AppData\Local\Google\Chrome\User Data\Default" -o test_case
+Example usage:  \> hindsight.py -i "C:\Users\Ryan\AppData\Local\Google\Chrome\User Data\Default" -o test_case
 
 Command Line Options:
 
@@ -84,32 +84,21 @@ quietly produce a report covering the wrong artifacts.
 Note that version detection still reads the profile's database schemas, so filtering does
 not change the detected browser version.
 
-## Decoded ETags
-
-Download and cache records keep the ETag the server sent. Most web servers and object
-stores build it from the file's modification time and size, so Hindsight reads it back
-into when the file was last changed on the server and how big it was. The result is in
-the `ETag Decoded` column of the XLSX Timeline, and in the separate `etag_format`,
-`etag_modified`, `etag_size` and `etag_notes` fields of the SQLite and JSONL output.
-
-Recognized formats are nginx, Apache httpd, IIS, ASP.NET Core, Azure Blob Storage (which
-also serves GitHub release downloads), Express, Tomcat, Werkzeug, althttpd, Akamai
-NetStorage, Qiniu, and the MD5 and multipart ETags of Amazon S3. Each decode is checked
-against the Last-Modified header and the byte count stored with the same response, and
-the notes say which of those agreed. A decoded value
-is still what the server claimed: it is strong corroboration where it agrees with them,
-not a substitute for hashing a recovered file.
-
 ## Default Profile Paths
 
 The Chrome default profile folder default locations are:
 * WinXP:   \[userdir\]\Local Settings\Application Data\Google\Chrome\User Data\Default
-* Vista/7/8/10: \[userdir\]\AppData\Local\Google\Chrome\User Data\Default
+* Windows Vista and later: \[userdir\]\AppData\Local\Google\Chrome\User Data\Default
 * Linux:   \[userdir\]/.config/google-chrome/Default
-* OS X:    \[userdir\]/Library/Application Support/Google/Chrome/Default
+* macOS:   \[userdir\]/Library/Application Support/Google/Chrome/Default
 * iOS:   \Applications\com.google.chrome.ios\Library\Application Support\Google\Chrome\Default
 * Android: /userdata/data/com.android.chrome/app_chrome/Default
 * CrOS: \home\user\\<GUID\>
+
+Firefox keeps each profile in its own folder, named with a random prefix (for example `ab12cd34.default-release`). The default locations of those folders are:
+* Windows: \[userdir\]\AppData\Roaming\Mozilla\Firefox\Profiles\\<profile\>
+* Linux:   \[userdir\]/.mozilla/firefox/\<profile\>
+* macOS:   \[userdir\]/Library/Application Support/Firefox/Profiles/\<profile\>
 
 ## Feature Requests
 

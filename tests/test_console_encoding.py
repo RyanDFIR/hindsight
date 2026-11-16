@@ -187,9 +187,13 @@ class TestStdoutIsResilient(unittest.TestCase):
             self.assertEqual(0, result.returncode,
                              f'stdout:\n{result.stdout}\nstderr:\n{result.stderr}')
             self.assertNotIn('UnicodeEncodeError', result.stdout + result.stderr)
-            # The banner falls back to a bullet when the encoding cannot take its
+            # The banner falls back to an asterisk when the encoding cannot take its
             # triangle, so its presence confirms the child really ran on cp1252.
-            self.assertIn('•', result.stdout)
+            self.assertIn('| |    *', result.stdout)
+            # And the fallback is ASCII, so the banner reads the same whatever the
+            # reader of a redirected stdout takes the bytes to be.
+            banner = result.stdout.split('by ryan@hindsig.ht')[0]
+            self.assertTrue(banner.isascii(), banner)
             self.assertTrue(os.path.exists(os.path.join(tmp, 'out.jsonl')))
 
 
