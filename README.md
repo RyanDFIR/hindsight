@@ -1,4 +1,6 @@
-<img src="https://raw.githubusercontent.com/RyanDFIR/hindsight/main/pyhindsight/static/h.png" height="100px"/> Hindsight
+<img src="https://raw.githubusercontent.com/RyanDFIR/hindsight/main/documentation/clearer-in-hindsight.jpg" alt="Browser history is clearer in Hindsight" width="100%"/>
+
+Hindsight
 =========
 
 Internet history forensics for Google Chrome/Chromium and Mozilla Firefox
