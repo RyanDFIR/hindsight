@@ -3161,6 +3161,29 @@ class Firefox(WebBrowser):
         pass
 
     class BrowserExtension(WebBrowser.BrowserExtension):
+        # Only extensions.json is read. Nothing below is looked for, in the XPI or
+        # anywhere else in the profile.
+        not_parsed = ('content scripts', 'dynamic scripts', 'granted and withheld permissions',
+                      'DNR rules', 'extension storage')
+
+        # Fields the base class starts as empty lists or False, for Chrome to fill.
+        # Nothing fills them here, and an empty list in a record says the add-on has
+        # none. None says nothing, and the JSONL encoder leaves None out.
+        _UNREAD_FIELDS = (
+            'content_scripts', 'dynamic_scripts', 'historical_dynamic_scripts',
+            'granted_api', 'withholding_api', 'runtime_granted_api',
+            'granted_scriptable_host', 'withholding_scriptable_host',
+            'runtime_granted_scriptable_host',
+            'granted_explicit_host', 'withholding_explicit_host',
+            'runtime_granted_explicit_host',
+            # Chrome's two places an extension can be found. Neither exists in Firefox.
+            'on_disk', 'in_secure_prefs')
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            for field in self._UNREAD_FIELDS:
+                setattr(self, field, None)
+
         @property
         def source(self):
             # The base class reports Chrome's disk / Secure Preferences presence.

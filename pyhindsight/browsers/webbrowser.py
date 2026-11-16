@@ -744,7 +744,7 @@ class WebBrowser(object):
             if value is None:
                 continue
             if isinstance(value, dict):
-                # e.g. installed_extensions is {'data': [...], 'presentation': ...}
+                # e.g. installed_extensions is {'data': [...]}
                 data = value.get('data')
                 sizes[name] = len(data) if isinstance(data, list) else len(value)
                 continue
@@ -1199,6 +1199,11 @@ class WebBrowser(object):
             self.sync_transaction_version = sync_transaction_version
 
     class BrowserExtension(object):
+        # Extension details that Hindsight does not read for this browser at all. The
+        # Extensions worksheet names them, so that a missing row is not taken to mean
+        # the extension has none, and the JSONL and SQLite writers add it to each record.
+        not_parsed = ()
+
         def __init__(self, profile, ext_id, name, description, version, permissions, manifest,
                      on_disk=False, in_secure_prefs=False, install_time=None, update_time=None,
                      location=None, state=None, from_webstore=None, was_installed_by_default=None,

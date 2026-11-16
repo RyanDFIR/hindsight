@@ -449,6 +449,11 @@ class HindsightEncoder(json.JSONEncoder):
 
             item['message'] = f'{item.get("name", "")} ({item.get("version", "")})'
 
+            # Firefox leaves the script and permission fields out of the record. Say
+            # that they were not read, so their absence is not taken for "none".
+            if obj.not_parsed:
+                item['not_parsed'] = list(obj.not_parsed)
+
             return item
 
         if isinstance(obj, Chrome.CookieItem):
@@ -3309,7 +3314,17 @@ class AnalysisSession(object):
                         write_script_row(f'{base} ({tag})', cs, rec_format, rec_center_format)
                         wrote_child = True
 
-                    if not wrote_child:
+                    # What the parser for this browser never reads. Written even when
+                    # there are rows above, and instead of the placeholder below, which
+                    # would say there are no content scripts when nobody looked.
+                    not_parsed = getattr(ext, 'not_parsed', None)
+                    if not_parsed:
+                        ext_ws.write(row_number, 0, '', none_format)
+                        ext_ws.write_string(row_number, 1, 'not parsed by Hindsight', none_format)
+                        ext_ws.write_string(row_number, 2, ', '.join(not_parsed), none_format)
+                        ext_ws.write_string(row_number, 7, profile, none_format)
+                        row_number += 1
+                    elif not wrote_child:
                         ext_ws.write(row_number, 0, '', none_format)
                         ext_ws.write_string(row_number, 1, '(no declarative content scripts)', none_format)
                         ext_ws.write_string(row_number, 7, profile, none_format)
@@ -3440,7 +3455,7 @@ class AnalysisSession(object):
 
             c.execute(
                 'CREATE TABLE installed_extensions(name TEXT, description TEXT, version TEXT, ext_id TEXT, '
-                'profile TEXT, permissions TEXT, manifest TEXT)')
+                'profile TEXT, permissions TEXT, manifest TEXT, not_parsed TEXT)')
 
             c.execute(
                 'CREATE TABLE extension_data(type TEXT, name TEXT, extension_id TEXT, key TEXT, value TEXT, '
@@ -3728,10 +3743,12 @@ class AnalysisSession(object):
                         permissions = json.dumps(permissions)
                     c.execute(
                         'INSERT INTO installed_extensions (name, description, version, ext_id, profile, '
-                        'permissions, manifest) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        'permissions, manifest, not_parsed) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                         (extension.name, extension.description, extension.version, extension.ext_id,
-                         extension.profile, permissions, extension.manifest))
+                         extension.profile, permissions, extension.manifest,
+                         # What this browser's parser does not read; NULL for Chrome.
+                         ', '.join(extension.not_parsed) or None))
 
             for preference_group in self.preferences:
                 title = preference_group.get('presentation', {}).get('title')

@@ -202,7 +202,7 @@ class TestDeliveryReconciliation(unittest.TestCase):
 
     def test_collection_sizes_handles_dict_shaped_collections(self):
         browser = WebBrowser('p', 'Chrome')
-        browser.installed_extensions = {'data': [1, 2, 3], 'presentation': {}}
+        browser.installed_extensions = {'data': [1, 2, 3]}
         self.assertEqual(3, browser.collection_sizes()['installed_extensions'])
 
 
