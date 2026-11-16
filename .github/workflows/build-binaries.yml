@@ -1,12 +1,25 @@
-# Builds one-file Hindsight binaries for Windows, Linux, and macOS with PyInstaller.
+# Builds, tests and publishes a Hindsight release. A release is cut from the GitHub
+# releases page in two stages, and nothing is built by hand.
 #
-# Triggers on pushing a release tag (v*) — binaries are attached to the matching
-# GitHub release (or a draft release is created if one doesn't exist yet), and the
-# sdist + wheel are published to PyPI via trusted publishing (no token secret;
-# requires the trusted publisher configured on PyPI for this repo/workflow with
-# environment "pypi").
-# Can also be run manually (workflow_dispatch) to get binaries as workflow artifacts
-# without cutting a release (no PyPI publish).
+# Stage one: publish a release for a new tag (v2026.11) with "Set as a pre-release"
+# ticked. This builds the one-file binaries for Windows, Linux and macOS with
+# PyInstaller, builds the sdist and wheel, tests all of them, and attaches them to the
+# pre-release. Nothing goes to PyPI.
+#
+# Stage two: edit the release notes, then untick "Set as a pre-release". This publishes
+# to PyPI the sdist and wheel that stage one attached, so the files that were tested
+# are the files that ship. It uses trusted publishing (no token secret; the trusted
+# publisher is configured on PyPI for this repo, this workflow file and the "pypi"
+# environment).
+#
+# A release published without the pre-release stage has nothing attached, and stage two
+# refuses it. Untick "pre-release" only after the stage one run has gone green.
+#
+# The trigger is "published", not "prereleased": GitHub does not send "prereleased" for
+# a pre-release that was first saved as a draft. Draft releases trigger nothing at all.
+#
+# Can also be run manually (workflow_dispatch) from any branch to build and test
+# everything without a release. The results are workflow artifacts only.
 #
 # Notes:
 # - Linux builds on the oldest available Ubuntu runner: PyInstaller binaries require
@@ -17,9 +30,8 @@
 name: Build binaries
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published, released]
   workflow_dispatch:
 
 # Read-only by default. The build jobs install and run third-party code (the
@@ -31,6 +43,10 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.suffix }})
+    # Stage one, or a manual run. Not stage two, which builds nothing.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'published' && github.event.release.prerelease)
     strategy:
       fail-fast: false
       matrix:
@@ -52,11 +68,13 @@ jobs:
         with:
           python-version: '3.13'
 
+      # For a release, the ref is the release's tag. The tag has to sit on a commit
+      # that already carries the new version, so bump and push before stage one.
       - name: Check tag matches pyhindsight.__version__
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'release'
         shell: bash
         run: |
-          VERSION=$(python -c "import pyhindsight; print(pyhindsight.__version__)")
+          VERSION=$(python -c "import pyhindsight; print(pyhindsight.__version__)" | tr -d '\r')
           if [[ "v$VERSION" != "$GITHUB_REF_NAME" ]]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match pyhindsight.__version__ (v$VERSION)"
             exit 1
@@ -77,7 +95,74 @@ jobs:
 
       - name: Smoke test
         shell: bash
-        run: ./dist-ci/hindsight --help
+        run: |
+          VERSION=$(python -c "import pyhindsight; print(pyhindsight.__version__)" | tr -d '\r')
+          ./dist-ci/hindsight --help > help.txt
+          cat help.txt
+          if ! grep -q "v$VERSION" help.txt; then
+            echo "::error::The binary's banner does not show v$VERSION"
+            exit 1
+          fi
+
+      # --help proves the binary starts. This proves it can parse and write: a module
+      # PyInstaller left out only fails when the code that imports it runs. The profiles
+      # are the small synthetic ones the unit tests use, one Chrome and one Firefox.
+      - name: Parse the fixture profiles with the built binary
+        shell: bash
+        run: |
+          # Absolute paths: Hindsight resolves a relative -l or --temp_dir against the
+          # directory the binary is in, not the working directory.
+          for profile in profiles/60 firefox; do
+            for format in xlsx sqlite jsonl; do
+              out="$PWD/smoke/$(basename "$profile")-$format"
+              mkdir -p "$out"
+              ./dist-ci/hindsight -i "tests/fixtures/$profile" -o "$out/out" -f "$format" \
+                -l "$out/hindsight.log" --temp_dir "$out/temp"
+              if [[ ! -s "$out/out.$format" ]]; then
+                echo "::error::No $format output for tests/fixtures/$profile"
+                exit 1
+              fi
+            done
+          done
+
+      # The server only has to start and serve its first page. Nobody looks at it here.
+      - name: Check the web interface starts
+        shell: bash
+        run: |
+          ./dist-ci/hindsight_gui > gui.log 2>&1 &
+          gui_pid=$!
+          answered=0
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail --output page.html http://localhost:8080/; then
+              answered=1
+              break
+            fi
+            sleep 2
+          done
+          kill "$gui_pid" 2>/dev/null || true
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            taskkill //F //T //IM hindsight_gui.exe > /dev/null 2>&1 || true
+          fi
+          if [[ "$answered" != 1 ]] || ! grep -qi hindsight page.html; then
+            echo "::error::The web interface did not serve its first page"
+            cat gui.log
+            exit 1
+          fi
+          echo "The web interface served its first page."
+
+      - name: Check the Windows version resource
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = python -c "import pyhindsight; print(pyhindsight.__version__)"
+          foreach ($exe in 'hindsight.exe', 'hindsight_gui.exe') {
+            $found = (Get-Item "dist-ci\$exe").VersionInfo.ProductVersion
+            if ($found -ne $version) {
+              Write-Output "::error::$exe has product version '$found', expected '$version'"
+              exit 1
+            }
+            Write-Output "$exe has product version $found"
+          }
 
       # pywin32 is optional at run time. Without it the exe still starts and parses,
       # and only loses the ability to decrypt cookies and passwords, so the --help
@@ -115,18 +200,20 @@ jobs:
           name: binaries-${{ matrix.suffix }}
           path: upload/*
 
+  # Stage one only. Attaches the binaries, and the sdist and wheel, to the pre-release.
+  # It waits for every build and every test, so files on the release are files that
+  # passed. Stage two relies on that.
   attach-to-release:
-    name: Attach binaries to release
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    name: Attach files to the pre-release
+    if: github.event_name == 'release'
+    needs: [build, build-dist, test-dist]
     runs-on: ubuntu-latest
     permissions:
-      contents: write # to upload to, or create, the release
+      contents: write # to upload to the release
     steps:
-      - name: Download all binaries
+      - name: Download the binaries, sdist and wheel
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: binaries-* # not the sdist and wheel, which go to PyPI
           path: upload
           merge-multiple: true
 
@@ -134,15 +221,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" upload/* --clobber --repo "$GITHUB_REPOSITORY" \
-            || gh release create "$GITHUB_REF_NAME" upload/* --draft --generate-notes --repo "$GITHUB_REPOSITORY"
+          ls -l upload
+          gh release upload "$GITHUB_REF_NAME" upload/* --clobber --repo "$GITHUB_REPOSITORY"
 
   # Builds the sdist and wheel, and cannot publish them. Building runs third-party
   # code (build and setuptools), so it happens here, in a job with a read-only token
-  # and no id-token, and the files are handed to publish-pypi as an artifact. Runs on
-  # manual runs too, so the packaging can be checked without cutting a release.
+  # and no id-token. Runs on manual runs too, so the packaging can be checked without
+  # cutting a release.
   build-dist:
     name: Build sdist and wheel
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'published' && github.event.release.prerelease)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -157,6 +247,11 @@ jobs:
       - name: Install build tools
         run: pip install --require-hashes -r requirements-dist.txt
 
+      # ccl_chromium_reader ships inside the package. This clones the commits named in
+      # its VENDORED.md and fails if the bundled copy differs from them.
+      - name: Check the bundled ccl_chromium_reader
+        run: python tools/vendor_ccl.py --check
+
       - name: Build sdist and wheel
         run: python -m build --no-isolation
 
@@ -166,22 +261,129 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # The only job that can publish to PyPI. It has no checkout and installs nothing:
-  # it downloads the files build-dist made and hands them to the publish action.
+  # Installs what build-dist made the way a user would, into an empty environment with
+  # dependencies from PyPI, and parses a profile with it. Python 3.11 because that is
+  # the oldest version the package says it supports. This is the check that the package
+  # is complete: a run from a checkout finds every file on disk whether or not it was
+  # packaged.
+  test-dist:
+    name: Install and run (${{ matrix.name }})
+    needs: build-dist
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: wheel on Linux
+            os: ubuntu-latest
+            file: '*.whl'
+          - name: wheel on Windows
+            os: windows-latest
+            file: '*.whl'
+          - name: sdist on Linux
+            os: ubuntu-latest
+            file: '*.tar.gz'
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Only for the fixture profiles. In a subdirectory, and nothing below runs from
+      # it, so Python cannot import the checkout in place of the installed package.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-dist
+          path: dist
+
+      - name: Install into an empty environment
+        shell: bash
+        env:
+          FILE: ${{ matrix.file }}
+        run: |
+          python -m venv venv
+          if [[ "$RUNNER_OS" == "Windows" ]]; then bin=venv/Scripts; else bin=venv/bin; fi
+          echo "BIN=$PWD/$bin" >> "$GITHUB_ENV"
+          "$bin/python" -m pip install dist/$FILE
+
+      - name: Check the installed package is the one being used
+        shell: bash
+        working-directory: dist
+        run: |
+          "$BIN/python" -c "import pyhindsight; print(pyhindsight.__file__)" | tee where.txt
+          grep -q site-packages where.txt
+          "$BIN/python" -c "import pyhindsight.browsers.chrome as c; print(c.ccl_chromium_reader.__name__)" | tr -d '\r' | tee ccl.txt
+          grep -qx "pyhindsight.lib.ccl_chromium_reader" ccl.txt
+
+      - name: Parse the fixture profiles
+        shell: bash
+        working-directory: dist
+        run: |
+          # Absolute paths: Hindsight resolves a relative -l or --temp_dir against the
+          # directory its script is in, not the working directory.
+          for profile in profiles/60 firefox; do
+            out="$PWD/smoke/$(basename "$profile")"
+            mkdir -p "$out"
+            "$BIN/hindsight" -i "../repo/tests/fixtures/$profile" -o "$out/out" -f jsonl \
+              -l "$out/hindsight.log" --temp_dir "$out/temp"
+            if [[ ! -s "$out/out.jsonl" ]]; then
+              echo "::error::No output for tests/fixtures/$profile"
+              exit 1
+            fi
+          done
+
+  # Stage two, and the only job that can publish to PyPI. It has no checkout and
+  # installs nothing: it downloads the sdist and wheel that stage one tested and
+  # attached to the release, and hands them to the publish action.
   publish-pypi:
     name: Publish to PyPI
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [build, build-dist] # don't publish if any platform binary failed to build
+    if: github.event_name == 'release' && github.event.action == 'released'
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/project/pyhindsight/
     permissions:
+      contents: read # to download the release's files
       id-token: write # required for PyPI trusted publishing (OIDC)
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: python-dist
-          path: dist
+      - name: Download the tested sdist and wheel from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]{4}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not vYYYY.MM or vYYYY.MM.N"
+            exit 1
+          fi
+          # v2026.11 -> 20261100 and v2026.11.1 -> 20261101, as in pyhindsight/__init__.py.
+          IFS=. read -r year month micro <<< "${GITHUB_REF_NAME#v}"
+          pypi_version=$(printf '%d%02d%02d' "$((10#$year))" "$((10#$month))" "$((10#${micro:-0}))")
+          sdist="pyhindsight-$pypi_version.tar.gz"
+          wheel="pyhindsight-$pypi_version-py3-none-any.whl"
+
+          # Stage one attaches these only after every build and test has passed. If any
+          # is missing, the release skipped stage one or stage one failed.
+          attached=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name')
+          missing=0
+          for name in "$sdist" "$wheel" hindsight.exe hindsight_gui.exe \
+              hindsight-linux-x86_64 hindsight_gui-linux-x86_64 \
+              hindsight-macos-arm64 hindsight_gui-macos-arm64 \
+              hindsight-macos-x86_64 hindsight_gui-macos-x86_64; do
+            if ! grep -qxF "$name" <<< "$attached"; then
+              echo "::error::$name is not attached to release $GITHUB_REF_NAME"
+              missing=1
+            fi
+          done
+          if [[ "$missing" == 1 ]]; then
+            echo "::error::Publish the release as a pre-release first, wait for that run to pass, then untick pre-release."
+            exit 1
+          fi
+
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern "$sdist" --pattern "$wheel"
+          ls -l dist
 
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

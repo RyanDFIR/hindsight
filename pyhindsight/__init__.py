@@ -1,5 +1,5 @@
 __author__ = "Ryan Benson"
-__version__ = "2026.06"
+__version__ = "2026.11"
 __email__ = "ryan@hindsig.ht"
 
 
