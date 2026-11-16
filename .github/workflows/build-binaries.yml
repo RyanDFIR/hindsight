@@ -110,9 +110,11 @@ jobs:
       - name: Parse the fixture profiles with the built binary
         shell: bash
         run: |
+          # Absolute paths: Hindsight resolves a relative -l or --temp_dir against the
+          # directory the binary is in, not the working directory.
           for profile in profiles/60 firefox; do
             for format in xlsx sqlite jsonl; do
-              out="smoke/$(basename "$profile")-$format"
+              out="$PWD/smoke/$(basename "$profile")-$format"
               mkdir -p "$out"
               ./dist-ci/hindsight -i "tests/fixtures/$profile" -o "$out/out" -f "$format" \
                 -l "$out/hindsight.log" --temp_dir "$out/temp"
@@ -320,8 +322,10 @@ jobs:
         shell: bash
         working-directory: dist
         run: |
+          # Absolute paths: Hindsight resolves a relative -l or --temp_dir against the
+          # directory its script is in, not the working directory.
           for profile in profiles/60 firefox; do
-            out="smoke/$(basename "$profile")"
+            out="$PWD/smoke/$(basename "$profile")"
             mkdir -p "$out"
             "$BIN/hindsight" -i "../repo/tests/fixtures/$profile" -o "$out/out" -f jsonl \
               -l "$out/hindsight.log" --temp_dir "$out/temp"
