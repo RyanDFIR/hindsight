@@ -1614,7 +1614,10 @@ class Chrome(WebBrowser):
                         if cmd_id == 0 and len(p) >= 8:      # SetTabWindow: window_id, tab_id
                             window_id = struct.unpack('<I', p[0:4])[0]
                             tab_id = struct.unpack('<I', p[4:8])[0]
-                            session_tabs.setdefault(tab_id, {})['window_id'] = window_id
+                            tab = session_tabs.setdefault(tab_id, {})
+                            tab['window_id'] = window_id
+                            # A tab placed in a window is open, whatever was said of it before.
+                            tab.pop('closed', None)
                             session_windows.setdefault(window_id, {})
 
                         elif cmd_id == 2 and len(p) >= 8:    # SetTabIndexInWindow: tab_id, index
@@ -1663,6 +1666,16 @@ class Chrome(WebBrowser):
                             except Exception:
                                 pass
 
+                        elif cmd_id == 16 and len(p) >= 4:    # TabClosed: tab_id, close_time
+                            # The tab is gone from its window. It stays in session_tabs, marked,
+                            # so its "tab closed" and navigation rows can still name the window;
+                            # the window listings leave it out. Chrome does not renumber the
+                            # remaining tabs here, it sends SetTabIndexInWindow for them, so a
+                            # closed tab left in would share an index with an open one.
+                            tab_id = struct.unpack('<I', p[0:4])[0]
+                            if tab_id in session_tabs:
+                                session_tabs[tab_id]['closed'] = True
+
                         elif cmd_id == 20 and len(p) >= 4:    # SetActiveWindow: window_id
                             session_active_window = struct.unpack('<I', p[0:4])[0]
 
@@ -1702,7 +1715,9 @@ class Chrome(WebBrowser):
             except Exception as e:
                 unparsed.source(filename, f'structural commands unreadable ({e})')
 
-        log.info(f' - Session structure: {len(session_windows)} windows, {len(session_tabs)} tabs, '
+        closed_tabs = sum(1 for t in session_tabs.values() if t.get('closed'))
+        log.info(f' - Session structure: {len(session_windows)} windows, '
+                 f'{len(session_tabs) - closed_tabs} open tabs ({closed_tabs} closed), '
                  f'{len(session_tab_groups)} tab groups')
 
         def get_tab_context(tab_id):
@@ -1716,7 +1731,9 @@ class Chrome(WebBrowser):
             if tab.get('index') is not None:
                 sel = session_windows.get(tab.get('window_id'), {}).get('selected_tab_index')
                 tab_desc = f'Tab Index: {tab["index"]}'
-                if sel is not None and sel == tab['index']:
+                if tab.get('closed'):
+                    tab_desc += ' [Closed]'
+                elif sel is not None and sel == tab['index']:
                     tab_desc += ' [Selected]'
                 parts.append(tab_desc)
 
