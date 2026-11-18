@@ -3054,7 +3054,10 @@ class AnalysisSession(object):
                         row_number += 1
 
                         # Get tabs in this window, sorted by index
-                        window_tabs = [(tid, t) for tid, t in tabs.items() if t.get('window_id') == window_id]
+                        # Closed tabs are kept in the structure for their timeline rows, but
+                        # are no longer in the window.
+                        window_tabs = [(tid, t) for tid, t in tabs.items()
+                                       if t.get('window_id') == window_id and not t.get('closed')]
                         window_tabs.sort(key=lambda x: x[1].get('index', 999))
                         selected_tab_index = win.get('selected_tab_index')
 
@@ -3903,7 +3906,8 @@ class AnalysisSession(object):
 
             for window_id, win in session.get('windows', {}).items():
                 window_tabs = sorted(
-                    ((tid, t) for tid, t in tabs.items() if t.get('window_id') == window_id),
+                    ((tid, t) for tid, t in tabs.items()
+                     if t.get('window_id') == window_id and not t.get('closed')),
                     key=lambda x: (x[1].get('index') is None, x[1].get('index') or 0))
                 selected_tab_index = win.get('selected_tab_index')
 
