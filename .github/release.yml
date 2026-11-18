@@ -1,4 +1,9 @@
 # .github/release.yml
+#
+# Sorts merged pull requests into sections when GitHub generates release notes.
+# A pull request is listed once, under the first section below that matches one
+# of its labels, so the order here decides where a pull request with two labels
+# goes. Pull requests with no matching label land under "Other Changes".
 
 changelog:
   exclude:
@@ -7,9 +12,18 @@ changelog:
     authors:
       - dependabot
   categories:
+    # Changes someone has to act on or know about when moving to this release:
+    # a raised Python floor, a renamed option, a column added to the output.
+    - title: ⚠️ Upgrading
+      labels:
+        - upgrading
     - title: 🚀 Features
       labels:
         - feature
+    # Changes that make Hindsight safer to run against hostile input.
+    - title: 🔒 Hardening
+      labels:
+        - hardening
     - title: 🛠️ Minor Changes & Fixes
       labels:
         - bug
